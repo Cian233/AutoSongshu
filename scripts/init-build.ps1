@@ -360,6 +360,8 @@ Write-Step "Project root: $ProjectRoot"
 
 if (-not $SkipUvSync) {
     Write-Step "Installing Python dependencies with uv sync..."
+    # 强制设置 UV_LINK_MODE=copy 以防止跨盘符/文件系统限制导致硬链接创建失败和卡死
+    $env:UV_LINK_MODE = "copy"
     Invoke-External -FilePath "uv" -Arguments @("sync")
 }
 else {
