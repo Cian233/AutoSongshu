@@ -1,0 +1,77 @@
+# Use the official uv image with Python 3.12
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+# Use Aliyun mirror for apt
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
+
+# Install system dependencies and security tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    nmap \
+    sqlmap \
+    dirsearch \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Enable bytecode compilation to improve startup time
+ENV UV_COMPILE_BYTECODE=1
+
+# Use Tsinghua mirror for uv/pip
+ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV UV_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+
+# Copy all project files (needed for setuptools to find src/ directory)
+COPY pyproject.toml uv.lock ./
+COPY src/ ./src/
+COPY README.md ./
+
+# Install project dependencies using uv (also installs the project)
+RUN uv sync --frozen
+
+# Install Playwright system dependencies and browser
+# Using npm.taobao.org mirror for browser download
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libatspi2.0-0 \
+    libgtk-3-0 \
+    libx11-xcb1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Playwright browsers using Tencent mirror
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://mirrors.cloud.tencent.com/npm/playwright/
+RUN uv run playwright install chromium || (echo "Warning: Playwright browser installation failed. You can install it manually later with: docker exec <container> uv run playwright install chromium")
+
+# Copy the rest of the application code
+COPY . .
+
+# Create directories for persistent data and artifacts
+RUN mkdir -p /app/data /app/artifacts /app/configs
+
+# Expose the web UI port (default 8000)
+EXPOSE 8000
+
+# Set default environment variables
+ENV AUTOSONGSHU_DATABASE_URL=sqlite:////app/data/autosongshu.db
+ENV AUTOSONGSHU_ARTIFACT_DIR=/app/artifacts
+ENV AUTOSONGSHU_SKILLS_DIRECTORIES=/app/skills
+ENV AUTOSONGSHU_DEFAULT_CONFIG_PATH=/app/configs/pentest.example.yaml
+ENV HOST=0.0.0.0
+ENV PORT=8000
+ENV AUTOSONGSHU_BROWSER_HEADLESS=true
+
+# Default command to run the web application
+CMD ["uv", "run", "autosongshu-web", "--host", "0.0.0.0", "--port", "8000"]

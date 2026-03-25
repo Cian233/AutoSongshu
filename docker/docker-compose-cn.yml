@@ -1,0 +1,43 @@
+services:
+  autosongshu:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cn
+    container_name: autosongshu
+    ports:
+      - "8000:8000"
+    volumes:
+      # Use a named volume for the database (data directory) for better portability and performance
+      - autosongshu_data:/app/data
+      # Keep artifacts as a host mount so you can easily view screenshots/logs on your machine
+      - ../artifacts:/app/artifacts
+      # Map configs and skills if they want to modify them from the host
+      - ../configs:/app/configs
+      - ../skills:/app/skills
+    env_file:
+      - ../.env
+    environment:
+      # Core Model Configuration (from .env or host environment)
+      - AUTOSONGSHU_MODEL_NAME=${AUTOSONGSHU_MODEL_NAME:-kimi-k2.5}
+      - AUTOSONGSHU_MODEL_API_KEY=${AUTOSONGSHU_MODEL_API_KEY}
+      - AUTOSONGSHU_MODEL_BASE_URL=${AUTOSONGSHU_MODEL_BASE_URL}
+      - OPENAI_MODEL_NAME=${OPENAI_MODEL_NAME}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+
+      # Runtime Settings
+      - HOST=0.0.0.0
+      - PORT=8000
+      - AUTOSONGSHU_DATABASE_URL=sqlite:////app/data/autosongshu.db
+      - AUTOSONGSHU_ARTIFACT_DIR=/app/artifacts
+      - AUTOSONGSHU_BROWSER_HEADLESS=true
+      
+      # Domestic mirrors for Python packages
+      - UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+      - UV_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+      - PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
+    restart: unless-stopped
+
+volumes:
+  # Named volume for database persistence
+  autosongshu_data:
