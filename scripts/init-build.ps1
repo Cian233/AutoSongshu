@@ -362,6 +362,10 @@ if (-not $SkipUvSync) {
     Write-Step "Installing Python dependencies with uv sync..."
     # 强制设置 UV_LINK_MODE=copy 以防止跨盘符/文件系统限制导致硬链接创建失败和卡死
     $env:UV_LINK_MODE = "copy"
+    # 如果没有指定镜像源，使用清华源加速下载以防止网络卡顿
+    if (-not $env:UV_INDEX_URL) {
+        $env:UV_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+    }
     Invoke-External -FilePath "uv" -Arguments @("sync")
 }
 else {
