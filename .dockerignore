@@ -21,8 +21,11 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+*.so
+*.egg
+*.egg-info/
 
-# Project specific
+# Project specific - Data and artifacts (mounted as volumes)
 data/
 artifacts/
 configs/data/
@@ -34,23 +37,44 @@ configs/data/
 *.log
 .env
 .env.local
+.env.*
 
 # Build
 dist/
 build/
-*.egg-info/
 
-# Docker
+# Docker - exclude docker directory to avoid cache invalidation
 docker/
-docker-compose.yml
+docker-compose*.yml
 .dockerignore
+Dockerfile*
 
 # IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Documentation (keep README.md)
+*.md
+!README.md
+docs/
+
+# Tests
+tests/
+test/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml

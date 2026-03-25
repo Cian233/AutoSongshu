@@ -4,7 +4,7 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 # Use Aliyun mirror for apt
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
 
-# Install system dependencies and security tools
+# Install ALL system dependencies in one layer (rarely changes)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -14,27 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     aria2 \
     unzip \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set the working directory inside the container
-WORKDIR /app
-
-# Enable bytecode compilation to improve startup time
-ENV UV_COMPILE_BYTECODE=1
-
-# Use Tsinghua mirror for uv/pip (only Tsinghua, no fallback)
-ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-
-# Copy all project files (needed for setuptools to find src/ directory)
-COPY pyproject.toml uv.lock ./
-COPY src/ ./src/
-COPY README.md ./
-
-# Install project dependencies using uv (also installs the project)
-RUN uv sync --frozen
-
-# Install Playwright system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Playwright browser dependencies
     libnss3 \
     libatk-bridge2.0-0 \
     libdrm2 \
@@ -51,7 +31,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libx11-xcb1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright browsers with mirror fallback strategy
+# Set the working directory inside the container
+WORKDIR /app
+
+# Enable bytecode compilation to improve startup time
+ENV UV_COMPILE_BYTECODE=1
+
+# Use Tsinghua mirror for uv/pip (only Tsinghua, no fallback)
+ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Copy dependency files first (cache layer for dependencies)
+COPY pyproject.toml uv.lock ./
+
+# Copy project code (needed for setuptools to find src/ directory)
+COPY src/ ./src/
+COPY README.md ./
+
+# Install Python dependencies and project (cache layer - only changes when deps change)
+RUN uv sync --frozen
+
+# Install Playwright browsers (cache layer - heavy download, only changes when playwright updates)
 RUN echo "Installing Playwright browsers..." && \
     (export PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright && \
      echo "Trying npmmirror mirror..." && \
@@ -61,10 +60,9 @@ RUN echo "Installing Playwright browsers..." && \
      unset PLAYWRIGHT_DOWNLOAD_HOST && \
      uv run playwright install chromium 2>&1 && \
      echo "✅ Browser installed from official source") || \
-    (echo "⚠️  Playwright browser installation failed. The application will work but browser features require manual installation:" && \
-     echo "    docker exec <container> uv run playwright install chromium")
+    (echo "⚠️  Playwright browser installation failed. The application will work but browser features require manual installation:")
 
-# Copy the rest of the application code
+# Copy the rest of the application code (configs, skills, etc. - changes frequently)
 COPY . .
 
 # Create directories for persistent data and artifacts

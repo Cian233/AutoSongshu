@@ -14,16 +14,18 @@ services:
       # Map configs and skills if they want to modify them from the host
       - ../configs:/app/configs
       - ../skills:/app/skills
-    env_file:
-      - ../.env
+    # env_file is optional - you can create .env or use environment variables directly
+    # env_file:
+    #   - ../.env
     environment:
-      # Core Model Configuration (from .env or host environment)
-      - AUTOSONGSHU_MODEL_NAME=${AUTOSONGSHU_MODEL_NAME:-kimi-k2.5}
-      - AUTOSONGSHU_MODEL_API_KEY=${AUTOSONGSHU_MODEL_API_KEY}
-      - AUTOSONGSHU_MODEL_BASE_URL=${AUTOSONGSHU_MODEL_BASE_URL}
-      - OPENAI_MODEL_NAME=${OPENAI_MODEL_NAME}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      # Core Model Configuration (set via environment variables or .env file)
+      # Example: export AUTOSONGSHU_MODEL_API_KEY=your-key
+      - AUTOSONGSHU_MODEL_NAME
+      - AUTOSONGSHU_MODEL_API_KEY
+      - AUTOSONGSHU_MODEL_BASE_URL
+      - OPENAI_MODEL_NAME
+      - OPENAI_API_KEY
+      - OPENAI_BASE_URL
 
       # Runtime Settings
       - HOST=0.0.0.0

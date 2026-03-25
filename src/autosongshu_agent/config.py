@@ -16,9 +16,9 @@ _ENV_ONLY_PATTERN = re.compile(r"^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _ENV_OVERRIDES: dict[tuple[str, ...], tuple[str, ...]] = {
-    ("model", "model_name"): ("AUTOSONGSHU_MODEL_NAME", "OPENAI_MODEL_NAME", "OPENAI_MODEL"),
-    ("model", "api_key"): ("AUTOSONGSHU_MODEL_API_KEY", "OPENAI_API_KEY"),
-    ("model", "base_url"): ("AUTOSONGSHU_MODEL_BASE_URL", "OPENAI_BASE_URL"),
+    ("model", "model_name"): ("AUTOSONGSHU_MODEL_NAME",),
+    ("model", "api_key"): ("AUTOSONGSHU_MODEL_API_KEY",),
+    ("model", "base_url"): ("AUTOSONGSHU_MODEL_BASE_URL",),
     ("model", "temperature"): ("AUTOSONGSHU_MODEL_TEMPERATURE",),
     ("model", "top_p"): ("AUTOSONGSHU_MODEL_TOP_P",),
     ("model", "stream"): ("AUTOSONGSHU_MODEL_STREAM",),
@@ -243,21 +243,17 @@ class ModelConfig(BaseModel):
     model_name: str = Field(
         default_factory=lambda: _get_first_env(
             "AUTOSONGSHU_MODEL_NAME",
-            "OPENAI_MODEL_NAME",
-            "OPENAI_MODEL",
         )
         or "gpt-4.1-mini",
     )
     api_key: str | None = Field(
         default_factory=lambda: _get_first_env(
             "AUTOSONGSHU_MODEL_API_KEY",
-            "OPENAI_API_KEY",
         ),
     )
     base_url: str | None = Field(
         default_factory=lambda: _get_first_env(
             "AUTOSONGSHU_MODEL_BASE_URL",
-            "OPENAI_BASE_URL",
         ),
     )
     temperature: float = Field(

@@ -1,9 +1,9 @@
 # Use the official uv image with Python 3.12
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-# Install system dependencies and security tools
+# Install ALL system dependencies in one layer (rarely changes)
 # We install nmap, sqlmap, and dirsearch as they are commonly used by skills.
-# ca-certificates is needed for HTTPS requests.
+# Playwright browser dependencies are included for browser-based agent features.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -11,6 +11,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sqlmap \
     dirsearch \
     ca-certificates \
+    # Playwright browser dependencies
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libatspi2.0-0 \
+    libgtk-3-0 \
+    libx11-xcb1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory inside the container
@@ -19,24 +34,21 @@ WORKDIR /app
 # Enable bytecode compilation to improve startup time
 ENV UV_COMPILE_BYTECODE=1
 
-# Copy only the dependency files first to leverage Docker layer caching
+# Copy dependency files first (cache layer for dependencies)
 COPY pyproject.toml uv.lock ./
 
-# Install project dependencies using uv
-# --frozen ensures we use the exact versions from uv.lock
-# --no-install-project skips installing the current project as a package for now
-RUN uv sync --frozen --no-install-project
+# Copy project code (needed for setuptools to find src/ directory)
+COPY src/ ./src/
+COPY README.md ./
 
-# Install Playwright browsers and their system dependencies
-# This is required for the browser-based agent features.
-# We only install chromium to keep the image size reasonable.
-RUN uv run playwright install --with-deps chromium
-
-# Copy the rest of the application code
-COPY . .
-
-# Install the project itself
+# Install Python dependencies and project (cache layer - only changes when deps change)
 RUN uv sync --frozen
+
+# Install Playwright browsers (cache layer - heavy download, only changes when playwright updates)
+RUN uv run playwright install chromium
+
+# Copy the rest of the application code (configs, skills, etc. - changes frequently)
+COPY . .
 
 # Create directories for persistent data and artifacts
 RUN mkdir -p /app/data /app/artifacts /app/configs

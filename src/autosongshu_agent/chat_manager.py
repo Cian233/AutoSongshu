@@ -1032,7 +1032,7 @@ class ChatSessionManager:
             api_key = "EMPTY"
         if not api_key and not raw_base_url:
             raise ValueError(
-                "Missing model credentials. Set OPENAI_API_KEY/model.api_key, "
+                "Missing model credentials. Set AUTOSONGSHU_MODEL_API_KEY/model.api_key, "
                 "or provide model.base_url for an OpenAI-compatible endpoint.",
             )
 
