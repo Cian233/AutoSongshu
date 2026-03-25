@@ -22,6 +22,10 @@ AutoSongshu 是一个自动化 Web 渗透测试辅助 Agent。它旨在通过大
 
 ***
 
+![加群二维码](./img/qrcode_1774443747440.jpg)
+
+点击加入AutoSongshu交流群：[1085788277](https://qm.qq.com/q/x0lEkhztCw)
+
 ## 🌟 核心功能
 
 - 🧠 **自主任务规划**：Agent 能根据目标自动拆解任务、选择工具并动态调整策略。
@@ -44,53 +48,73 @@ AutoSongshu 是一个自动化 Web 渗透测试辅助 Agent。它旨在通过大
 
 这是最简单、环境最一致的启动方式，镜像内已预装所有必要的安全工具和浏览器。
 
-1. **准备配置**：
-   ```bash
-   cp .env.example .env
-   # 编辑 .env 文件，填写你的 API_KEY 等配置
-   # 下列三个变量属于必填，国产模型推荐使用kimi-K2.5或GLM-5
-   #  - `AUTOSONGSHU_MODEL_NAME`: 模型名称（如 `kimi-k2.5`）。
-   #  - `AUTOSONGSHU_MODEL_API_KEY`: 你的 API 密钥。
-   #  - `AUTOSONGSHU_MODEL_BASE_URL`: API 服务地址。
+#### 快速启动
 
+1. **设置环境变量**（两种方式任选其一）：
+
+   **方式 A - 直接设置环境变量：**
+   ```bash
+   export AUTOSONGSHU_MODEL_NAME=your-model-name
+   export AUTOSONGSHU_MODEL_API_KEY=your-api-key
+   export AUTOSONGSHU_MODEL_BASE_URL=https://your-api-endpoint.com/v1
    ```
-2. **一键启动**：
-   - **Windows (PowerShell)**:
-     ```powershell
-     cd docker
-     ./deploy.ps1
-     ```
-   - **Linux/macOS**:
-     ```bash
-     cd docker
-     bash deploy.sh
-     ```
+   **方式 B - 使用 .env 文件**（可选）：
+   ```bash
+   cp docker/.env.example .env
+   # 编辑 .env 文件，填写你的 API_KEY 等配置
+   ```
+2. **选择版本启动**：
+
+   **国内用户（使用国内镜像源，速度更快）：**
+   ```bash
+   cd docker
+   docker-compose -f docker-compose-cn.yml up -d
+   ```
+   **海外用户（使用官方源）：**
+   ```bash
+   cd docker
+   docker-compose up -d
+   ```
 3. **访问界面**：
    打开浏览器访问 <http://localhost:8000>
+
+#### 手动构建（可选）
+
+如果你需要重新构建镜像（例如修改了代码）：
+
+**国内用户：**
+
+```bash
+cd docker
+docker-compose -f docker-compose-cn.yml up --build -d
+```
+
+**海外用户：**
+
+```bash
+cd docker
+docker-compose up --build -d
+```
+
+**查看日志：**
+
+```bash
+docker-compose logs -f autosongshu
+```
+
+**停止服务：**
+
+```bash
+docker-compose down
+```
 
 ***
 
 ### 方式二：本地开发环境启动
 
-1. **安装依赖**：
-   确保已安装 [uv](https://github.com/astral-sh/uv)。
-   ```powershell
-   uv sync
-   # 安装浏览器
-   uv run playwright install chromium
-   ```
-2. **初始化构建**（下载第三方工具如 sqlmap/dirsearch）：
-   ```powershell
-   .\scripts\init-build.ps1
-   ```
-3. **启动 Web 控制台**：
-   ```powershell
-   .\scripts\start-autosongshu.ps1
-   ```
-   或者直接运行：
-   ```powershell
-   uv run autosongshu-web --host 127.0.0.1 --port 8000
-   ```
+配置.env 文件，填写你的模型名称、API 密钥和服务地址。
+
+双击 ‘start-autosongshu-web.bat’ 启动 Web 控制台。
 
 ***
 
