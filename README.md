@@ -1,8 +1,16 @@
 # AutoSongshu Agent (自动松鼠) 🐿️
 
-[!\[Docker Support\](https://img.shields.io/badge/Docker-Supported-blue.svg null)](./docker/)
-[!\[Python 3.12\](https://img.shields.io/badge/Python-3.12+-green.svg null)](https://www.python.org/)
-[!\[License\](https://img.shields.io/badge/License-Custom-orange.svg null)](./LICENSE)
+<p align="center">
+  <a href="./docker/">
+    <img src="https://img.shields.io/badge/Docker-Supported-blue.svg" alt="Docker Support">
+  </a><!--
+  --><a href="https://www.python.org/">
+    <img src="https://img.shields.io/badge/Python-3.12+-green.svg" alt="Python 3.12">
+  </a><!--
+  --><a href="./LICENSE">
+    <img src="https://img.shields.io/badge/License-Custom-orange.svg" alt="License">
+  </a>
+</p>
 
 ## 技术进步应当服务于减轻劳动、缩短工时、改善劳动条件和增进共同福祉，而不应成为剥夺劳动者生计、削弱劳动者议价能力或扩大管理控制的工具。任何复制、修改、分发、托管、集成或部署本项目者，均需在遵守本项目开源协议的前提下行事。
 
@@ -21,10 +29,6 @@ AutoSongshu 是一个自动化 Web 渗透测试辅助 Agent。它旨在通过大
 > ⚠️ **警告**：本项目仅供学习交流及在**获得充分授权**的目标上进行安全测试。严禁用于任何非法用途。
 
 ***
-
-![加群二维码](./img/qrcode_1774443747440.jpg)
-
-点击加入AutoSongshu交流群：[1085788277](https://qm.qq.com/q/x0lEkhztCw)
 
 ## 🌟 核心功能
 
@@ -155,3 +159,9 @@ docker-compose down
 ## 🤝 贡献与反馈
 
 欢迎提交 Issue 或 Pull Request 来完善工具集和 Agent 策略。在使用过程中请务必遵守当地法律法规。
+
+## 交流群
+
+![加群二维码](./img/qrcode_1774443747440.jpg)
+
+点击加入AutoSongshu交流群：[1085788277](https://qm.qq.com/q/x0lEkhztCw)
