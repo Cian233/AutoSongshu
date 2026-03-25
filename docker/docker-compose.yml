@@ -23,10 +23,6 @@ services:
       - AUTOSONGSHU_MODEL_NAME
       - AUTOSONGSHU_MODEL_API_KEY
       - AUTOSONGSHU_MODEL_BASE_URL
-      - OPENAI_MODEL_NAME
-      - OPENAI_API_KEY
-      - OPENAI_BASE_URL
-
       # Runtime Settings
       - HOST=0.0.0.0
       - PORT=8000

@@ -7,36 +7,36 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Use a named volume for the database (data directory) for better portability and performance
+      # 使用命名卷存储数据库，提高可移植性和性能
       - autosongshu_data:/app/data
-      # Keep artifacts as a host mount so you can easily view screenshots/logs on your machine
+      # 将 artifacts 挂载到宿主机，方便查看截图和日志
       - ../artifacts:/app/artifacts
-      # Map configs and skills if they want to modify them from the host
+      # 挂载配置文件和技能目录，支持从宿主机修改
       - ../configs:/app/configs
       - ../skills:/app/skills
-    # env_file is optional - you can create .env or use environment variables directly
+    # env_file 是可选的 - 你可以创建 .env 文件或直接设置环境变量
     # env_file:
     #   - ../.env
     environment:
-      # Core Model Configuration (set via environment variables or .env file)
-      # Example: export AUTOSONGSHU_MODEL_API_KEY=your-key
+      # 核心模型配置（通过环境变量或 .env 文件设置）
+      # 示例: export AUTOSONGSHU_MODEL_API_KEY=你的密钥
       - AUTOSONGSHU_MODEL_NAME=kimi-k2.5
       - AUTOSONGSHU_MODEL_API_KEY=
       - AUTOSONGSHU_MODEL_BASE_URL=
 
-      # Runtime Settings
+      # 运行时设置
       - HOST=0.0.0.0
       - PORT=8000
       - AUTOSONGSHU_DATABASE_URL=sqlite:////app/data/autosongshu.db
       - AUTOSONGSHU_ARTIFACT_DIR=/app/artifacts
       - AUTOSONGSHU_BROWSER_HEADLESS=true
       
-      # Domestic mirrors for Python packages
+      # 国内镜像源配置
       - UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
       - UV_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
       - PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
     restart: unless-stopped
 
 volumes:
-  # Named volume for database persistence
+  # 命名卷用于数据库持久化
   autosongshu_data:
