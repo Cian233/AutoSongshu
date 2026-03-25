@@ -462,20 +462,29 @@ from autosongshu_agent.sandbox import PythonSandbox
 from autosongshu_agent.artifacts import ArtifactStore
 import tempfile
 import sys
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 try:
+    print("Loading config...")
     config = load_config("configs/pentest.example.yaml")
     root = tempfile.mkdtemp()
     artifacts = ArtifactStore(str(root), "init")
+    
+    print(f"Creating sandbox instance...")
     sandbox = PythonSandbox(config.sandbox, ScopePolicy("http://localhost", []), artifacts, "init", "auth")
+    
+    print("Bootstrapping sandbox environment (this may take a minute or two to install packages)...")
     sandbox._ensure_bootstrapped()
+    
     print("Sandbox bootstrapped successfully.")
 except Exception as e:
     print(f"Failed to bootstrap sandbox: {e}")
     sys.exit(1)
 '@
 Set-Content -LiteralPath $sandboxInitScriptPath -Value $sandboxInitScriptContent -Encoding UTF8
-Invoke-External -FilePath "uv" -Arguments @("run", "python", $sandboxInitScriptPath)
+Invoke-External -FilePath "uv" -Arguments @("run", "python", "-u", $sandboxInitScriptPath)
 
 Write-Step "Build and initialization complete!"
 Write-Host "Next step:" -ForegroundColor Cyan

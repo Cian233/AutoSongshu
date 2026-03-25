@@ -288,6 +288,7 @@ class PythonSandbox:
         if not packages:
             return
 
+        print(f"Installing {len(packages)} bootstrap packages into sandbox: {', '.join(packages)}")
         uv_path = shutil.which("uv")
         if uv_path:
             command = [
@@ -320,6 +321,7 @@ class PythonSandbox:
                 f"stdout:\n{result['stdout']}\n"
                 f"stderr:\n{result['stderr']}"
             )
+        print("Bootstrap packages installed successfully.")
 
     def _ensure_bootstrap_packages(self) -> None:
         if not self.settings.bootstrap_packages:
@@ -499,6 +501,7 @@ class PythonSandbox:
                 if self.venv_dir.exists():
                     self._cleanup_venv()
 
+                print(f"Creating sandbox virtual environment at {self.venv_dir}...")
                 uv_path = shutil.which("uv")
                 if uv_path:
                     command = [
