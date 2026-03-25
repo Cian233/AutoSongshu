@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sqlmap \
     dirsearch \
     ca-certificates \
+    aria2 \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory inside the container
@@ -20,9 +22,8 @@ WORKDIR /app
 # Enable bytecode compilation to improve startup time
 ENV UV_COMPILE_BYTECODE=1
 
-# Use Tsinghua mirror for uv/pip
+# Use Tsinghua mirror for uv/pip (only Tsinghua, no fallback)
 ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ENV UV_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 # Copy all project files (needed for setuptools to find src/ directory)
 COPY pyproject.toml uv.lock ./
@@ -32,8 +33,7 @@ COPY README.md ./
 # Install project dependencies using uv (also installs the project)
 RUN uv sync --frozen
 
-# Install Playwright system dependencies and browser
-# Using npm.taobao.org mirror for browser download
+# Install Playwright system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 \
     libatk-bridge2.0-0 \
@@ -51,9 +51,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libx11-xcb1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright browsers using Tencent mirror
-ENV PLAYWRIGHT_DOWNLOAD_HOST=https://mirrors.cloud.tencent.com/npm/playwright/
-RUN uv run playwright install chromium || (echo "Warning: Playwright browser installation failed. You can install it manually later with: docker exec <container> uv run playwright install chromium")
+# Install Playwright browsers with mirror fallback strategy
+RUN echo "Installing Playwright browsers..." && \
+    (export PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright && \
+     echo "Trying npmmirror mirror..." && \
+     uv run playwright install chromium 2>&1 && \
+     echo "✅ Browser installed from npmmirror") || \
+    (echo "⚠️  npmmirror failed, trying official source..." && \
+     unset PLAYWRIGHT_DOWNLOAD_HOST && \
+     uv run playwright install chromium 2>&1 && \
+     echo "✅ Browser installed from official source") || \
+    (echo "⚠️  Playwright browser installation failed. The application will work but browser features require manual installation:" && \
+     echo "    docker exec <container> uv run playwright install chromium")
 
 # Copy the rest of the application code
 COPY . .

@@ -14,8 +14,9 @@ services:
       # Map configs and skills if they want to modify them from the host
       - ../configs:/app/configs
       - ../skills:/app/skills
-    env_file:
-      - ../.env
+    # env_file is optional - you can create .env or use environment variables directly
+    # env_file:
+    #   - ../.env
     environment:
       # Core Model Configuration (from .env or host environment)
       - AUTOSONGSHU_MODEL_NAME=${AUTOSONGSHU_MODEL_NAME:-kimi-k2.5}
