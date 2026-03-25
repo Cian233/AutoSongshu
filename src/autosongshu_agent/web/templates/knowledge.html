@@ -1,0 +1,90 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AutoSongshu 知识库</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{{ request.url_for('static', path='styles.css') }}?v={{ asset_version }}" />
+    <link rel="stylesheet" href="{{ request.url_for('static', path='knowledge.css') }}?v={{ asset_version }}" />
+  </head>
+  <body class="knowledge-page-body">
+    <main class="kbp-shell kbp-shell-list">
+      <header class="kbp-toolbar">
+        <div class="kbp-toolbar-left">
+          <a class="kbp-brand" href="/">
+            <span class="kbp-brand-mark">KB</span>
+            <span class="kbp-brand-copy">
+              <strong>AutoSongshu</strong>
+              <em>Knowledge</em>
+            </span>
+          </a>
+          <div class="kbp-toolbar-title">
+            <p class="kbp-kicker">Knowledge Base</p>
+            <h1>知识库工作台</h1>
+          </div>
+        </div>
+
+        <div class="kbp-toolbar-actions">
+          <label class="kbp-search" for="kbp-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15.8 14.4h-.7l-.2-.2a6.3 6.3 0 1 0-.7.7l.2.2v.7L19 20.5 20.5 19l-4.7-4.6zm-5.5 0a4.2 4.2 0 1 1 0-8.4 4.2 4.2 0 0 1 0 8.4z" />
+            </svg>
+            <input id="kbp-search" type="search" placeholder="搜索知识库名称" />
+          </label>
+          <button class="kbp-btn kbp-btn-ghost" id="kbp-refresh" type="button">刷新</button>
+          <a class="kbp-btn kbp-btn-ghost" href="/">返回对话</a>
+        </div>
+      </header>
+
+      <section class="kbp-overview">
+        <div class="kbp-overview-copy">
+          <h2>知识沉淀与检索管理</h2>
+          <p>支持创建知识库、导入文档、命中测试，并与当前对话会话绑定复用。</p>
+          <div class="kbp-overview-meta">
+            <article class="kbp-metric">
+              <span>知识库</span>
+              <strong id="kbp-stat-bases">0</strong>
+            </article>
+            <article class="kbp-metric">
+              <span>文档</span>
+              <strong id="kbp-stat-docs">0</strong>
+            </article>
+            <article class="kbp-metric">
+              <span>分片</span>
+              <strong id="kbp-stat-chunks">0</strong>
+            </article>
+          </div>
+        </div>
+        <section class="kbp-create-bar">
+          <label class="kbp-field">
+            <span>知识库名称</span>
+            <input id="kbp-create-name" type="text" placeholder="例如：产品手册 / FAQ / 规章制度" />
+          </label>
+          <label class="kbp-field">
+            <span>描述（可选）</span>
+            <input id="kbp-create-description" type="text" placeholder="用途、范围、维护负责人" />
+          </label>
+          <button class="kbp-btn kbp-btn-primary" id="kbp-create" type="button">创建知识库</button>
+        </section>
+      </section>
+
+      <section class="kbp-content kbp-content-list">
+        <section class="kbp-catalog kbp-catalog-full">
+          <div class="kbp-catalog-head">
+            <h3>知识库列表</h3>
+            <span id="kbp-base-count">0 个</span>
+          </div>
+          <div class="kbp-base-grid" id="kbp-base-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="{{ request.url_for('static', path='knowledge-list.js') }}?v={{ asset_version }}"></script>
+  </body>
+</html>

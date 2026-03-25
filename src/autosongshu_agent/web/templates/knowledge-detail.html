@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AutoSongshu 知识库详情</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{{ request.url_for('static', path='styles.css') }}?v={{ asset_version }}" />
+    <link rel="stylesheet" href="{{ request.url_for('static', path='knowledge.css') }}?v={{ asset_version }}" />
+  </head>
+  <body class="knowledge-page-body" data-base-id="{{ knowledge_base_id }}" data-active-tab="{{ active_tab }}">
+    <main class="kbp-shell kbp-shell-detail">
+      <header class="kbp-toolbar">
+        <div class="kbp-toolbar-left">
+          <a class="kbp-brand" href="/knowledge">
+            <span class="kbp-brand-mark">KB</span>
+            <span class="kbp-brand-copy">
+              <strong>AutoSongshu</strong>
+              <em>Knowledge</em>
+            </span>
+          </a>
+          <div class="kbp-toolbar-title">
+            <p class="kbp-kicker">Knowledge Base</p>
+            <h1>{{ (knowledge_base.name if knowledge_base else "") or "知识库详情" }}</h1>
+          </div>
+        </div>
+
+        <div class="kbp-toolbar-actions">
+          <button class="kbp-btn kbp-btn-ghost" id="kbp-refresh" type="button">刷新</button>
+          <a class="kbp-btn kbp-btn-ghost" href="/knowledge">返回知识库列表</a>
+          <a class="kbp-btn kbp-btn-ghost" href="/">返回对话</a>
+        </div>
+      </header>
+
+      <section class="kbp-detail-layout">
+        <aside class="kbp-side-nav">
+          <div class="kbp-catalog-head">
+            <h3>知识库导航</h3>
+            <span id="kbp-base-count">0 个</span>
+          </div>
+          <label class="kbp-search kbp-search-side" for="kbp-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15.8 14.4h-.7l-.2-.2a6.3 6.3 0 1 0-.7.7l.2.2v.7L19 20.5 20.5 19l-4.7-4.6zm-5.5 0a4.2 4.2 0 1 1 0-8.4 4.2 4.2 0 0 1 0 8.4z" />
+            </svg>
+            <input id="kbp-search" type="search" placeholder="筛选知识库名称" />
+          </label>
+          <div class="kbp-side-list" id="kbp-base-list"></div>
+        </aside>
+
+        <section class="kbp-detail kbp-detail-page" id="kbp-main"></section>
+      </section>
+    </main>
+
+    <script type="module" src="{{ request.url_for('static', path='knowledge-detail.js') }}?v={{ asset_version }}"></script>
+  </body>
+</html>

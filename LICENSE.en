@@ -1,0 +1,221 @@
+Working People's Rights Protection Source License v1.2
+(劳动人民权益保护源码许可 v1.2 - English Translation)
+
+Copyright © 2026 Cian233
+
+IMPORTANT NOTICES
+
+1. This License is designed to make the source code publicly available while preventing the outcomes of the project from being used to cause workers to lose their jobs, lose stable employment status, or suffer a substantial deterioration in working conditions.
+2. This License is NOT an Open Source Initiative (OSI) approved open source license, nor is it a Free Software Foundation (FSF) free software license. This License incorporates the Copyleft principle to ensure derivative works and network services are also open source, but superimposes strict labor protection conditions.
+3. This License permits research, study, testing, modification, distribution, and conditional deployment, but DOES NOT grant any rights that result in worker unemployment, destabilization, pay cuts, reduction in hours, outsourcing substitution, or similar labor deprivation consequences.
+4. Production Deployment, in addition to complying with this License, must accept and comply with the `DEPLOYMENT-COVENANT.md` in the repository's root directory. Those who do not accept this deployment covenant shall not enjoy the rights necessary for Production Deployment.
+5. All deployment entities must continuously comply with the labor laws, working hours and rest/vacation rules, overtime compensation rules, labor contract rules, and mandatory norms related to labor protection in their applicable jurisdictions; those who fail to meet these requirements shall not enjoy any rights for Production Deployment.
+6. For deployment entities employing personnel within mainland China, operating within mainland China, or substantially affecting workers within mainland China through affiliated entities, they must also meet the "China Labor Law Compliance Status" and "Two-Day Weekend Baseline" defined in this License. Those who fail to meet these requirements shall not enjoy any rights for Production Deployment.
+
+PREAMBLE
+
+Technological progress should serve to reduce toil, shorten working hours, improve working conditions, and promote common well-being, rather than becoming a tool to deprive workers of their livelihood, weaken workers' bargaining power, or expand managerial control. Anyone who copies, modifies, distributes, hosts, integrates, or deploys this Project shall act in accordance with this License. To prevent the open-source spirit of this License from being commercially exploited or circumvented through technical architectures, this License adopts a strict Copyleft mechanism, ensuring that all derivative works, network service providers, and combined systems are subject to the same open-source terms and labor protection conditions.
+
+1. DEFINITIONS
+
+1.1 "Project Materials" means the source code, object code, scripts, configurations, model weights, prompt templates, interface definitions, data processing pipelines, documentation, and modified versions thereof in this Project.
+
+1.2 "Production Deployment" means the use of the Project Materials in any organization's actual business, management, service delivery, human resources, operations, content production, customer support, analysis, auditing, decision-making, or similar processes, regardless of whether such use is internal deployment, external service, API, plugin, container image, embedded integration, or operated by a third party on its behalf.
+
+1.3 "Protected Worker" means any worker who, within twelve months prior to the proposed deployment of the Project Materials, has engaged in, supported, managed, audited, or is reasonably expected to be hired to engage in work that is the same or substantially similar to the functions automated by the deployment, including regular employees, fixed-term employees, probationary employees, dispatched workers, platform workers, outsourced on-site personnel, and other employed labor providers.
+
+1.4 "Adverse Labor Measure" means any of the following outcomes, whether occurring directly or indirectly, immediately or delayed:
+(a) Layoffs, dismissals, terminations, elimination of posts, elimination of headcount, elimination during probation, or non-renewal of contracts;
+(b) Hiring freezes, non-replacement of vacancies, or non-replacement of natural attrition, where the main responsibilities of the reduced positions are assumed by the Project Materials;
+(c) Pay cuts, reduction of hours, cancellation or reduction of bonuses, allowances, benefits, subsidies, vacations, or other remunerative treatments;
+(d) Converting stable positions into outsourcing, labor dispatch, contracting, platform gig work, casual work, or offshore low-protection positions;
+(e) Transferring workers to lower-paying, lower-level, more unstable, or substantially downgraded positions;
+(f) Forcing workers to leave their posts or accept substantially adverse changes through algorithmic scoring, automated assessment, automated scheduling, automated performance screening, automated disciplinary action, unreasonable elevation of targets, forced relocation, or forced transfer;
+(g) Making promotion, demotion, retention, elimination, or renewal decisions based primarily on the Project Materials;
+(h) Any measure that replaces human labor with the Project Materials, and whose main purpose or reasonably foreseeable effect is to reduce the number of workers, lower labor costs, or weaken labor protections.
+
+1.5 "Affiliated Circumvention" means the implementation of Adverse Labor Measures that should have been borne by the user itself, through parent companies, subsidiaries, affiliated companies, suppliers, contractors, franchise systems, labor dispatch units, platform intermediaries, clients, offshore entities, or other third parties.
+
+1.6 "Baseline Working Conditions" means the average of the following for the relevant function, department, or business unit over the twelve consecutive months prior to the adoption of the Project Materials:
+(a) Full-time equivalent headcount;
+(b) Cash compensation levels;
+(c) Benefit levels;
+(d) Proportion of stable employment;
+(e) Position levels and promotion paths.
+
+1.7 "Network Provision" means providing the functions, interfaces, inferences, automation, or management capabilities of the Project Materials to third parties via the Internet, a local area network, or other networks.
+
+1.8 "Corresponding Source" means the complete preferred form required to install, run, study, modify, build, deploy, and redistribute the Project Materials and their Derivative Works, including but not limited to build scripts, dependency instructions, interface definitions, deployment scripts (e.g., container orchestration files), model loading and invocation logic, database schema definitions, related service encapsulation code, and modification records.
+
+1.9 "China Employing Entity" means an entity that meets any of the following conditions:
+(a) Established, registered, operating, or actually managed within the People's Republic of China;
+(b) Directly or indirectly hiring, managing, assessing, or deploying workers within the People's Republic of China;
+(c) Substantially affecting the working hours, rest/vacation, compensation, job stability, or renewal arrangements of workers within mainland China through arrangements with affiliated companies, suppliers, contractors, platform partners, or clients.
+
+1.10 "China Labor Law Compliance Status" means that the China Employing Entity continuously meets the following conditions at the time of and after deployment:
+(a) No effective and uncorrected major violations of facts related to working hours, rest/vacation, overtime pay, labor contracts, social insurance, termination of labor relations, wage arrears, or labor security supervision;
+(b) Has not been listed within the last twenty-four months as an object of "Public Announcement of Major Labor Security Violations" issued by the human resources and social security authorities, or is still in the rectification period;
+(c) Has not been listed in the list of untrustworthy entities for wage arrears within the last twenty-four months, or is still in the rectification period;
+(d) Has obtained valid approval and continuously meets the approval conditions for irregular working hours systems or comprehensively calculated working hours systems that require legal approval;
+(e) Can provide true, complete, and contemporaneously formed records of working hours, rest, overtime, wages, and employment upon request.
+
+1.11 "Two-Day Weekend Baseline" means the minimum standard continuously implemented by the China Employing Entity for the teams, positions, and their direct support positions related to this Project:
+(a) Arranging no less than two rest days per natural week;
+(b) Not implementing "996", "007", "Big/Small Weeks" (alternating 6-day and 5-day work weeks), "Single Day Off", "Long/Short Weeks", or other systems that substantially deprive workers of a two-day weekend;
+(c) Not encroaching on rest days under the guise of being on duty, on standby, team building, training, learning check-ins, online response, or performance assessment;
+(d) If rest days are temporarily occupied due to statutory emergencies, equivalent compensatory time off must be arranged within thirty days and corresponding remuneration paid according to law.
+
+1.12 "Disqualified Status" means the status of a China Employing Entity that fails to meet any requirement of Section 1.10 or Section 1.11.
+
+1.13 "Applicable Labor Law" means the mandatory laws, administrative regulations, rules, regulatory orders, effective judgments, and enforcement decisions related to labor relations, working hours, rest/vacation, overtime compensation, wages and remuneration, social security, labor safety, collective bargaining, termination of labor relations, labor security supervision, anti-retaliation protection, etc., in the jurisdictions where the deployment entity, its affiliated entities, and related employment arrangements are located.
+
+1.14 "General Labor Law Disqualified Status" means any deployment entity exhibiting any of the following circumstances:
+(a) The existence of effective and uncorrected major labor law violations in its applicable jurisdiction;
+(b) Being publicly announced, listed in an untrustworthy list, restricted list, or similar public disciplinary list by competent authorities due to major labor law violations, and still in the rectification period;
+(c) Failing to obtain valid approval or applying beyond the scope for special working hours, shift work, or exemption systems that require legal approval or filing;
+(d) Refusing to provide labor law compliance records required by this License, or providing false, incomplete, or unverifiable records.
+
+1.15 "Derivative Works" means works created, modified, or combined based on the Project Materials or any part thereof, including but not limited to:
+(a) Modifications, translations, or adaptations of the source code;
+(b) Programs formed by statically linking, dynamically linking, or importing the Project Materials as a library;
+(c) Overall systems or applications formed by calling, encapsulating, or substantially combining the Project Materials as a core component, backend service, or microservice through Inter-Process Communication (IPC), Remote Procedure Call (RPC), HTTP/REST API, or other network protocols.
+
+2. GRANT AND PATENT LICENSE
+
+2.1 Copyright Grant. Subject to continuous compliance with all conditions of this License, the Copyright Holder grants any recipient a worldwide, non-exclusive, royalty-free license to copy, run, study, modify, and distribute the Project Materials and their Derivative Works, and to perform Production Deployment and Network Provision subject to this License and `DEPLOYMENT-COVENANT.md`.
+
+2.2 Patent Grant. Each contributor hereby grants to any recipient a worldwide, royalty-free, non-exclusive, irrevocable (except as otherwise provided in this License) patent license to make, use, offer for sale, sell, import, or otherwise transfer the Project Materials and their Derivative Works.
+
+2.3 Patent Litigation Retaliation. If any entity institutes patent litigation against any person (including a cross-claim or counterclaim in a lawsuit) alleging that the Project Materials or their Derivative Works directly or indirectly constitute patent infringement, then all copyright and patent licenses granted to that entity under this License shall terminate automatically as of the date such litigation is filed.
+
+3. COPYLEFT AND LICENSE CONDITIONS
+
+Sections 3 through 9 are conditions of the grant of this License. Any act that does not meet these conditions falls outside the scope of the authorization of this License.
+
+3.1 Retention of Notices. Any copies, modified versions, Derivative Works, or substantial portions must retain this copyright notice, the full text of this License, the disclaimer, and references to `DEPLOYMENT-COVENANT.md`, `TRADEMARK-POLICY.md`, and `ENFORCEMENT.md`. Those who modify the Project Materials must clearly indicate the content of the modifications, the date of modification, and the name of the modifier.
+
+3.2 Copyleft Distribution. Any entity distributing the Project Materials or their Derivative Works must license the entire Derivative Work as a whole, free of charge to all recipients under the terms of this License (and only under this License), and simultaneously provide the complete Corresponding Source. Independent proprietary rights cannot be claimed over any part of the Derivative Works to circumvent the Copyleft requirements of this License.
+
+3.3 Network Service Copyleft (SaaS Circumvention Prevention). Any entity providing the functions, interfaces, or inference services of the Project Materials or their Derivative Works to third parties or an unspecified majority internally via a network (including but not limited to the Internet, LAN, Intranet) is deemed to be distributing. The provider must prominently offer to all users interacting with it over the network a means to freely download the complete Corresponding Source of the running version (e.g., providing a standard Git repository link or a one-click download button).
+
+3.4 Isolation Architecture Circumvention Prevention. Claiming that the calling or integrating software is not a Derivative Work through "isolation" architectural designs—such as encapsulating the Project Materials as an independent microservice, placing them in a container or virtual machine, placing them behind a reverse proxy, or communicating with proprietary closed-source software solely via APIs (e.g., REST, gRPC, GraphQL)—is prohibited. As long as the operation of the proprietary software substantially relies on the functions of the Project Materials, the proprietary software, together with the Project Materials, constitutes a Derivative Work subject to this License as a whole, and must be open-sourced in its entirety and comply with this License.
+
+3.5 Prohibition of Additional Restrictions. No additional legal, contractual, or technical restrictions that conflict with this License may be imposed on the Project Materials or their Derivative Works (for example, requiring the signing of a Non-Disclosure Agreement (NDA) to obtain the source code, using Digital Rights Management (DRM) technology to restrict the execution of modified code, or utilizing cloud service terms to override this License).
+
+4. CORE LABOR PROTECTION RESTRICTIONS
+
+4.1 No one shall use the Project Materials for Production Deployment that causes Adverse Labor Measures.
+
+4.2 No one shall use the Project Materials for projects whose goals, metrics, or business plan components include reducing jobs, suppressing wages, lowering the proportion of stable employment, or weakening trade unions or workers' collective bargaining power.
+
+4.3 No one shall use the Project Materials to automate or substantially dominate the following decisions:
+(a) Layoffs, dismissals, elimination of posts, or non-renewal of contracts;
+(b) Hiring freezes or non-replacement of vacancies;
+(c) Pay cuts, reduction of hours, or reduction of benefits;
+(d) Performance-based eliminations, disciplinary actions, or scheduling punishments;
+(e) Downgrading of position levels, conversion to outsourcing, platformization, or similar destabilizing decisions.
+
+4.4 As long as the Project Materials constitute a substantial factor in a specific labor replacement, job reduction, or deterioration of working conditions, it is deemed a violation of this License; this is not limited to whether it is the sole cause, final decision-making tool, or sole technical component.
+
+4.5 When any deployment entity is in a General Labor Law Disqualified Status, it shall not copy, modify, distribute, host, Network Provide, or Production Deploy the Project Materials; its related rights obtained based on this License are automatically suspended.
+
+4.6 When a China Employing Entity is in a Disqualified Status, it shall not copy, modify, distribute, host, Network Provide, or Production Deploy the Project Materials; its related rights obtained based on this License are automatically suspended.
+
+5. ANTI-CIRCUMVENTION CLAUSES
+
+5.1 Section 4 shall not be circumvented under the guise of "non-replacement of natural attrition", "organizational optimization", "business restructuring", "efficiency improvement", "AI empowerment", "position upgrading", "headcount adjustment", "outsourcing of non-core business", "cost synergy", "supplier replacement", or other names.
+
+5.2 Section 4 shall not be circumvented by splitting, renaming, relocating, converting to contracting, or transferring original positions to affiliated companies or suppliers.
+
+5.3 Adverse Labor Measures that should have been borne by the user itself shall not be implemented through Affiliated Circumvention.
+
+5.4 Within twenty-four months after the deployment of the Project Materials, if there is a decline in Baseline Working Conditions in the relevant function or business unit, it is presumed that the decline is related to the Project Materials; the user bears the burden of rebutting this presumption with complete, contemporaneously formed written evidence.
+
+5.5 If a user refuses to provide records, explanations, or audit cooperation required by this License or `DEPLOYMENT-COVENANT.md`, it is presumed to be in violation of this License.
+
+5.6 China Employing Entities shall not circumvent the Two-Day Weekend Baseline using expressions such as "flexible working", "striver agreements", "voluntary overtime", "rotational culture", "wartime mechanisms", "project sprints", "normalized duty", or similar phrasing.
+
+5.7 China Employing Entities shall not circumvent Section 1.11 by splitting positions into formal and outsourced, onshore and offshore, main contracts and outsourcing agreements, day shifts and night shifts, or R&D and operational support.
+
+6. PRECONDITIONS FOR PRODUCTION DEPLOYMENT
+
+6.1 Prior to any Production Deployment, the user must accept and comply with `DEPLOYMENT-COVENANT.md`.
+
+6.2 Prior to any Production Deployment, the user must form a written Labor Impact Assessment, specifying at least:
+(a) The specific functions planned for automation;
+(b) The affected positions and headcount;
+(c) The expected changes compared to Baseline Working Conditions;
+(d) Protection plans such as training, transfer, shortening working hours without pay cuts, or hiring additional auditing positions;
+(e) Grievance contact person and contact information;
+(f) Deployment version, date, responsible person, and business unit.
+
+6.3 If there is a trade union, employee representatives, or other worker representative organizations, the aforementioned assessment must be provided at least forty-five days prior to deployment and negotiated in good faith.
+
+6.4 Failure to complete the procedures listed in Sections 6.1 through 6.3 prohibits Production Deployment.
+
+6.5 For all deployment entities, in addition to Sections 6.1 through 6.4, they must also form and archive prior to deployment a self-certification of labor law compliance in their applicable jurisdiction, as well as administrative dispositions, judgments, arbitrations, public announcements, and rectification proofs related to major labor law violations over the past twenty-four months (if any).
+
+6.6 For China Employing Entities, in addition to Sections 6.1 through 6.5, they must also form and archive prior to deployment:
+(a) A self-certification of China labor law compliance;
+(b) An explanation of the execution of the Two-Day Weekend and a list of covered positions;
+(c) Statistics on working hours and overtime, arrangements for rest days, and compensatory time off records for the past twelve months;
+(d) Approval documents for special working hours (if applicable);
+(e) Labor security administrative dispositions, arbitrations, judgments, public announcements, and rectification proofs over the past twenty-four months (if any).
+
+7. PERMITTED AUTOMATION TRANSFORMATIONS
+
+A relevant deployment is not considered a violation of Section 4 ONLY when all the following conditions are met:
+(a) No Adverse Labor Measures occur;
+(b) Affected workers receive transfer, training, or job restructuring arrangements with no less than their original compensation, benefits, stability, and seniority;
+(c) Productivity gains are prioritized for shortening working hours without pay cuts, increasing remuneration, improving safety and working conditions, or increasing manual review or public service capabilities, rather than reducing headcount;
+(d) The user retains complete records and can prove the above matters;
+(e) If worker representatives exist, they have not explicitly objected, or alternative arrangements have been made through a written collective agreement;
+(f) Continuous compliance with applicable labor law requirements;
+(g) For China Employing Entities, continuous compliance with the China Labor Law Compliance Status and the Two-Day Weekend Baseline.
+
+8. RECORDS, AUDIT, AND BURDEN OF PROOF
+
+8.1 Users must retain at least the following records for four years:
+(a) Deployment version and time;
+(b) Affected business units;
+(c) Labor Impact Assessment and its updated drafts;
+(d) Records of hiring, renewal, elimination, transfer, outsourcing, and compensation adjustments;
+(e) Communication records with trade unions or worker representatives;
+(f) Logs and institutional documents related to the use of Project Material outputs for personnel decisions;
+(g) Attendance records, overtime applications and approvals, and ledgers for overtime pay and compensatory time off;
+(h) Two-day weekend scheduling records, on-call standby arrangements, rest day communication notices, and response logs;
+(i) Approval documents for special working hours, labor security supervision processing documents, status on public announcement lists, and rectification materials;
+(j) Inspection, penalty, public announcement, untrustworthiness, or similar disciplinary status and rectification materials from labor competent authorities in applicable jurisdictions.
+
+8.2 Upon presenting specific clues of a breach, the Copyright Holder or representatives of affected workers have the right to request access to records directly related to the judgment of the breach, subject to necessary desensitization.
+
+8.3 Failure of a user to provide relevant materials within fifteen working days after receiving a reasonable request constitutes an independent breach and triggers the presumption under Section 5.5.
+
+9. TERMINATION AND RESTORATION
+
+9.1 For anyone who violates this License, all rights acquired based on this License terminate automatically.
+
+9.2 In the event of a breach involving workers' interests, unless the breaching party:
+(a) Stops the relevant deployment;
+(b) Restores the affected workers' positions or provides equivalent positions;
+(c) Makes up for wages, benefits, and related losses, or reaches a written remedial agreement with worker representatives;
+(d) Completes supplementary disclosure of source code and records;
+its rights shall not be restored.
+
+9.3 Upon termination of rights, the breaching party must immediately cease copying, distributing, modifying, hosting, Network Provision, and Production Deployment.
+
+9.4 Any deployment entity during a General Labor Law Disqualified Status shall not claim any rights based on this License; it may only apply to the Copyright Holder for restoration after completing rectification and submitting verifiable proof of compliance.
+
+9.5 For China Employing Entities, during a Disqualified Status, no rights based on this License may be claimed; they may only apply to the Copyright Holder for restoration after completing rectification and continuously meeting the China Labor Law Compliance Status and the Two-Day Weekend Baseline for twelve consecutive months.
+
+10. TRADEMARK RESERVATION
+
+This License does not grant any rights to the project name, logos, certification marks, domain names, or trade dress. Relevant rules are found in `TRADEMARK-POLICY.md`. Any entity violating this License has no right to claim its deployment as "official", "certified", "compatible", or similar expressions.
+
+11. DISCLAIMER OF WARRANTY
+
+The Project Materials are provided "AS IS", without warranty of any kind, express or implied. To the maximum extent permitted by applicable law, the Copyright Holder shall not be liable for any damages arising from the use or inability to use the Project Materials.
+
+12. SEVERABILITY
+
+If any provision of this License is held to be invalid or unenforceable, the remaining provisions shall continue in full force and effect; the relevant provision shall be interpreted in a manner that most closely approximates the labor protection purpose of this License to the maximum extent permitted by applicable law.

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AutoSongshu 对话工作台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{{ request.url_for('static', path='styles.css') }}?v={{ asset_version }}" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <div class="sidebar-brand">
+            <div class="sidebar-brand-row">
+              <div class="sidebar-brand-main">
+                <span class="sidebar-brand-mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path
+                      d="M4 12c2.2-4.7 6.2-7 12-7-2.6 1.6-4.2 3.7-5 6.3 3.2-.7 6-.2 8 1.4-2.8.1-4.8 1.1-6.2 3 2 .2 3.6 1.1 4.7 2.7-2.3-.8-4.8-.7-7.4.2-2.1.8-4.2 1-6.1.5 1.5-.9 2.5-2.2 3-3.8C5.8 15 4.7 13.7 4 12Z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                </span>
+                <div class="sidebar-brand-copy">
+                  <h1>AutoSongshu</h1>
+                  <p>授权评估工作台</p>
+                </div>
+              </div>
+              <button class="sidebar-icon-button" id="settings-button" type="button" aria-label="默认设置" title="默认设置">
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <span class="sr-only">默认设置</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="sidebar-actions">
+            <button class="sidebar-new-chat-button" id="new-chat-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 7v10M7 12h10"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.8"
+                />
+                <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+              </svg>
+              <span>开启新对话</span>
+            </button>
+            <a class="sidebar-knowledge-button" id="knowledge-button" href="/knowledge">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M4.5 7.5L12 4L19.5 7.5L12 11L4.5 7.5Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.8"
+                />
+                <path
+                  d="M4.5 12.5L12 16L19.5 12.5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.8"
+                />
+                <path
+                  d="M4.5 17L12 20L19.5 17"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.8"
+                />
+              </svg>
+              <span>知识库</span>
+            </a>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="session-list" id="chat-sessions-list" aria-live="polite"></div>
+        </div>
+
+        <div class="sidebar-compat" hidden aria-hidden="true">
+          <span id="stat-total-chats">0</span>
+          <span id="stat-running-chats">0</span>
+          <span class="mini-pill status-reconnecting" id="connection-state">连接中</span>
+        </div>
+
+        <div class="sidebar-footer" hidden aria-hidden="true">
+          <span>产物目录</span>
+          <code id="artifact-root">artifacts/</code>
+        </div>
+      </aside>
+
+      <main class="chat-app">
+        <section class="chat-thread-shell">
+          <div class="chat-thread" id="chat-thread" aria-live="polite"></div>
+        </section>
+
+        <section class="composer-shell">
+          <form class="composer-form" id="run-form">
+            <label class="composer-input-wrap">
+              <span class="sr-only">输入消息</span>
+              <textarea
+                id="goal"
+                name="goal"
+                rows="3"
+                placeholder="{{ default_goal }}"
+                autocomplete="off"
+                required
+              ></textarea>
+            </label>
+
+            <div class="composer-toolbar">
+              <p class="composer-hint" id="composer-hint" hidden aria-live="polite"></p>
+              <button
+                class="composer-attach-button"
+                id="attachment-button"
+                type="button"
+                aria-label="附件功能预留"
+                title="附件功能预留"
+                disabled
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M16.5 6.5v9.25a4.25 4.25 0 1 1-8.5 0V7.75a2.75 2.75 0 1 1 5.5 0v7.5a1.25 1.25 0 1 1-2.5 0V8.5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.8"
+                  />
+                </svg>
+              </button>
+              <button class="composer-send-button" id="submit-button" type="submit" aria-label="发送消息">
+                <span class="sr-only" id="submit-button-label">发送消息</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 2L11 13"></path>
+                  <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+                </svg>
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+
+      <aside class="right-sidebar">
+        <header class="chat-header">
+          <div class="chat-heading">
+            <span class="header-kicker" id="chat-kicker">新对话</span>
+            <h2 id="chat-title">开始新的评估对话</h2>
+            <p id="chat-subtitle" hidden aria-live="polite"></p>
+          </div>
+          <div class="chat-header-actions">
+            <span class="status-pill status-idle" id="submit-status">就绪</span>
+            <button class="ghost-button small" id="pause-button" type="button" hidden>暂停</button>
+            <button class="ghost-button small" id="distill-knowledge-button" type="button" hidden>沉淀</button>
+            <button class="ghost-button small" id="refresh-button" type="button">刷新</button>
+          </div>
+          <div class="session-meta" id="session-meta" hidden></div>
+        </header>
+      </aside>
+    </div>
+
+    <div class="settings-modal" id="settings-modal" hidden>
+      <div class="settings-backdrop" id="settings-backdrop"></div>
+      <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="settings-head">
+          <div>
+            <span class="header-kicker">会话默认配置</span>
+            <h3 id="settings-title">新会话默认配置</h3>
+          </div>
+          <button class="ghost-button small" id="close-settings" type="button">关闭</button>
+        </div>
+
+        <div class="settings-body">
+          <label class="field">
+            <span>配置文件</span>
+            <input id="config-path" name="config_path" type="text" value="{{ default_config_path }}" required />
+          </label>
+
+          <label class="field">
+            <span>授权配置库</span>
+            <div class="inline-field">
+              <select id="authorization-profile" name="authorization_profile">
+                <option value="">使用当前表单内容</option>
+              </select>
+              <button class="ghost-button small" id="save-authorization" type="button">保存到库</button>
+            </div>
+          </label>
+
+          <div class="settings-note" id="authorization-feedback" data-tone="muted" aria-live="polite"></div>
+          <div class="authorization-library" id="authorization-library"></div>
+
+          <label class="field">
+            <span>评估名称</span>
+            <input id="engagement-name" name="engagement_name" type="text" placeholder="authorized-web-assessment" />
+          </label>
+
+          <label class="field">
+            <span>授权编号</span>
+            <input id="authorization-code" name="authorization" type="text" placeholder="SEC-2026-001" />
+          </label>
+
+          <label class="field">
+            <span>起始 URL</span>
+            <input id="start-url" name="start_url" type="url" placeholder="留空表示无限制，或输入起始 URL" />
+          </label>
+
+          <label class="field">
+            <span>允许主机（每行一个，支持 `*.example.com`）</span>
+            <textarea id="allowed-hosts" name="allowed_hosts" rows="4" placeholder="留空表示无限制&#10;example.com&#10;*.example.com"></textarea>
+          </label>
+
+          <label class="checkbox-field">
+            <input id="allow-subdomains" name="allow_subdomains" type="checkbox" checked />
+            <span>允许子域名</span>
+          </label>
+
+          <label class="field">
+            <span>授权备注</span>
+            <textarea id="engagement-notes" name="engagement_notes" rows="3" placeholder="例如：仅测试登录、账号、密码重置流程。"></textarea>
+          </label>
+
+          <label class="field">
+            <span>额外技能目录（每行一个）</span>
+            <textarea id="skill-dirs" name="skill_dirs" rows="4" placeholder=".\skills\custom-recon"></textarea>
+          </label>
+
+          <label class="field">
+            <span>关联知识库（可多选）</span>
+            <div class="knowledge-selector" id="knowledge-base-selector"></div>
+            <a class="ghost-button small" href="/knowledge">打开知识库页面</a>
+          </label>
+        </div>
+
+        <div class="settings-actions">
+          <button class="ghost-button" id="reset-settings" type="button">重置</button>
+          <button class="primary-button" id="save-settings" type="button">完成</button>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const bootstrap = {
+        assetVersion: {{ asset_version | tojson }},
+        defaultConfigPath: {{ default_config_path | tojson }},
+        defaultGoal: {{ default_goal | tojson }},
+        defaultAuthorizationDraft: {{ default_authorization_draft | tojson }}
+      };
+      window.__AUTOSONGSHU_BOOTSTRAP__ = bootstrap;
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "./api.js": "{{ request.url_for('static', path='api.js') }}?v={{ asset_version }}",
+          "./render.js": "{{ request.url_for('static', path='render.js') }}?v={{ asset_version }}",
+          "./state.js": "{{ request.url_for('static', path='state.js') }}?v={{ asset_version }}",
+          "./markdown.js": "{{ request.url_for('static', path='markdown.js') }}?v={{ asset_version }}"
+        }
+      }
+    </script>
+    <script type="module" src="{{ request.url_for('static', path='app.js') }}?v={{ asset_version }}"></script>
+  </body>
+</html>
