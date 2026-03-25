@@ -1,0 +1,11 @@
+{
+    "python.analysis.exclude": [
+        "configs/data/sandboxes/**"
+    ],
+    "files.exclude": {
+        "configs/data/sandboxes/**": true
+    },
+    "search.exclude": {
+        "configs/data/sandboxes/**": true
+    }
+}

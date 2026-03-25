@@ -454,6 +454,29 @@ else {
     Write-Step "Skipping status checks."
 }
 
-Write-Step "Initialization build complete."
+Write-Step "Initializing sandbox environment..."
+$sandboxInitScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("autosongshu-sandbox-init-{0}.py" -f ([guid]::NewGuid().ToString("N")))
+$sandboxInitScriptContent = @'
+from autosongshu_agent.config import load_config, ScopePolicy
+from autosongshu_agent.sandbox import PythonSandbox
+from autosongshu_agent.artifacts import ArtifactStore
+import tempfile
+import sys
+
+try:
+    config = load_config("configs/pentest.example.yaml")
+    root = tempfile.mkdtemp()
+    artifacts = ArtifactStore(str(root), "init")
+    sandbox = PythonSandbox(config.sandbox, ScopePolicy("http://localhost", []), artifacts, "init", "auth")
+    sandbox._ensure_bootstrapped()
+    print("Sandbox bootstrapped successfully.")
+except Exception as e:
+    print(f"Failed to bootstrap sandbox: {e}")
+    sys.exit(1)
+'@
+Set-Content -LiteralPath $sandboxInitScriptPath -Value $sandboxInitScriptContent -Encoding UTF8
+Invoke-External -FilePath "uv" -Arguments @("run", "python", $sandboxInitScriptPath)
+
+Write-Step "Build and initialization complete!"
 Write-Host "Next step:" -ForegroundColor Cyan
-Write-Host "  .\\scripts\\start-autosongshu.ps1" -ForegroundColor Cyan
+Write-Host "  .\scripts\start-autosongshu.ps1" -ForegroundColor Cyan

@@ -127,6 +127,40 @@ class PythonSandbox:
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
+    def _cleanup_venv(self) -> None:
+        """Attempts to remove the virtual environment directory aggressively."""
+        if not self.venv_dir.exists():
+            return
+
+        try:
+            # On Windows, renaming before deleting often works around locked file issues
+            # in the original path, allowing subsequent creation at that path.
+            if os.name == "nt":
+                temp_venv = self.venv_dir.with_name(
+                    f"{self.venv_dir.name}_old_{int(time.time())}"
+                )
+                try:
+                    self.venv_dir.rename(temp_venv)
+                    target_to_remove = temp_venv
+                except (OSError, PermissionError):
+                    target_to_remove = self.venv_dir
+            else:
+                target_to_remove = self.venv_dir
+
+            def _handle_remove_error(func, path, _):
+                # Try to make the file writable and retry
+                try:
+                    os.chmod(path, 0o777)
+                    func(path)
+                except Exception:
+                    pass
+
+            shutil.rmtree(target_to_remove, onerror=_handle_remove_error)
+        except Exception:
+            # We don't want to block bootstrap if cleanup fails partially,
+            # but we hope the original path is now clear enough for 'uv venv'.
+            pass
+
     def _workspace_update_key(self, target: Path) -> tuple[str, str]:
         workspace_key = str(self.workspace_dir.resolve())
         relative_key = target.relative_to(self.workspace_dir).as_posix()
@@ -335,6 +369,10 @@ class PythonSandbox:
             for key, value in os.environ.items()
             if not any(marker in key.upper() for marker in redacted_markers)
         }
+        # Isolate from the host's virtual environment
+        for key in ["VIRTUAL_ENV", "CONDA_PREFIX", "UV_PROJECT_ENVIRONMENT"]:
+            env.pop(key, None)
+
         env["PYTHONUTF8"] = "1"
         env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
         env["AUTOSONGSHU_SCOPE_START_URL"] = self.scope.start_url
@@ -455,14 +493,18 @@ class PythonSandbox:
                 return
 
             if not venv_ready:
+                # If the venv exists but is not ready, try to clean it up first
+                # to avoid issues where 'uv venv' or 'python -m venv' fails to
+                # overwrite a corrupted existing venv (especially on Windows).
+                if self.venv_dir.exists():
+                    self._cleanup_venv()
+
                 uv_path = shutil.which("uv")
                 if uv_path:
                     command = [
                         uv_path,
                         "venv",
                         str(self.venv_dir),
-                        "--python",
-                        sys.executable,
                         "--seed",
                     ]
                 else:
