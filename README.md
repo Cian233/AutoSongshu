@@ -48,7 +48,7 @@ AutoSongshu 是一个自动化 Web 渗透测试辅助 Agent。它旨在通过大
 
 ***
 
-!\[运行截图]\(./img/运行截图.png null)
+![运行截图](./img/运行截图.png)
 
 ## 🚀 快速启动
 
@@ -170,6 +170,6 @@ docker-compose down
 
 ## 交流群
 
-!\[加群二维码]\(./img/qrcode\_1774443747440.jpg null)
+![加群二维码](./img/qrcode_1774443747440.jpg)
 
 点击加入AutoSongshu交流群：[1085788277](https://qm.qq.com/q/x0lEkhztCw)
