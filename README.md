@@ -116,6 +116,8 @@ docker-compose down
 
 ### 方式二：本地开发环境启动
 
+确保您的电脑上有UV（Python 包管理器）和Git。如果没有，请根据您的操作系统安装。
+
 配置.env 文件，填写你的模型名称、API 密钥和服务地址。
 
 双击 ‘start-autosongshu-web.bat’ 启动 Web 控制台。
