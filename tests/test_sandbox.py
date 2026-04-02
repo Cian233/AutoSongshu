@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from autosongshu_agent.artifacts import ArtifactStore
 from autosongshu_agent.config import SandboxConfig
@@ -256,7 +257,8 @@ class SandboxEditTests(unittest.TestCase):
         with self.assertRaisesRegex(SandboxError, "Markdown code fences"):
             self.sandbox.run_python(code="```python\nprint('ready')\n```")
 
-    def test_register_default_tools_exposes_sandbox_edit_file(self) -> None:
+    @patch("builtins.input", return_value="y")
+    def test_register_default_tools_exposes_sandbox_edit_file(self, mock_input) -> None:
         toolkit = _RecordingToolkit()
         runtime = SimpleNamespace(
             config=SimpleNamespace(sandbox=SimpleNamespace(enabled=True)),
@@ -278,7 +280,8 @@ class SandboxEditTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["received"]["path"], "payload.py")
 
-    def test_register_default_tools_exposes_sandbox_multiedit_file(self) -> None:
+    @patch("builtins.input", return_value="y")
+    def test_register_default_tools_exposes_sandbox_multiedit_file(self, mock_input) -> None:
         toolkit = _RecordingToolkit()
         runtime = SimpleNamespace(
             config=SimpleNamespace(sandbox=SimpleNamespace(enabled=True)),

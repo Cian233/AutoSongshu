@@ -428,42 +428,65 @@ class PythonSandbox:
             environment.update({key: str(value) for key, value in extra_env.items()})
 
         started = time.monotonic()
+        is_windows = os.name == "nt"
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if is_windows else 0
+        
         try:
-            completed = subprocess.run(
+            with subprocess.Popen(
                 command,
                 cwd=str(cwd or self.workspace_dir),
                 env=environment,
-                input=input_text,
-                capture_output=True,
+                stdin=subprocess.PIPE if input_text is not None else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=timeout_sec,
-                check=False,
-            )
+                creationflags=creationflags,
+                start_new_session=not is_windows,
+            ) as proc:
+                try:
+                    stdout, stderr = proc.communicate(input=input_text, timeout=timeout_sec)
+                    returncode = proc.returncode
+                    timed_out = False
+                except subprocess.TimeoutExpired as exc:
+                    if is_windows:
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                    else:
+                        import signal
+                        try:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        except Exception:
+                            proc.kill()
+                    
+                    proc.wait(timeout=5)
+                    stdout = coerce_text(exc.stdout)
+                    stderr = coerce_text(exc.stderr) or f"Command timed out after {timeout_sec} seconds."
+                    returncode = None
+                    timed_out = True
+
             duration_sec = round(time.monotonic() - started, 3)
             result = {
-                "ok": completed.returncode == 0,
-                "exit_code": completed.returncode,
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
+                "ok": not timed_out and returncode == 0,
+                "exit_code": returncode,
+                "stdout": coerce_text(stdout),
+                "stderr": coerce_text(stderr),
                 "duration_sec": duration_sec,
                 "command": command,
                 "cwd": str(cwd or self.workspace_dir),
-                "timed_out": False,
+                "timed_out": timed_out,
             }
-        except subprocess.TimeoutExpired as exc:
+        except Exception as exc:
             duration_sec = round(time.monotonic() - started, 3)
             result = {
                 "ok": False,
                 "exit_code": None,
-                "stdout": coerce_text(exc.stdout),
-                "stderr": coerce_text(exc.stderr)
-                or f"Command timed out after {timeout_sec} seconds.",
+                "stdout": "",
+                "stderr": f"Execution failed: {exc}",
                 "duration_sec": duration_sec,
                 "command": command,
                 "cwd": str(cwd or self.workspace_dir),
-                "timed_out": True,
+                "timed_out": False,
             }
 
         self._log_activity(

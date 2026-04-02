@@ -5,6 +5,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import ToolResponse
@@ -51,7 +52,7 @@ class ToolDedupeTests(unittest.TestCase):
         runtime = SimpleNamespace(tool_call_cache=PerTurnToolCallCache())
         calls: list[str] = []
 
-        def browser_snapshot(url: str = "") -> ToolResponse:
+        def browser_snapshot(runtime: Any, url: str = "") -> ToolResponse:
             calls.append(url)
             return _tool_response(f"snapshot:{url}:{len(calls)}")
 
@@ -70,11 +71,11 @@ class ToolDedupeTests(unittest.TestCase):
         runtime = SimpleNamespace(tool_call_cache=PerTurnToolCallCache())
         counters = {"snapshot": 0, "navigate": 0}
 
-        def browser_snapshot() -> ToolResponse:
+        def browser_snapshot(runtime: Any) -> ToolResponse:
             counters["snapshot"] += 1
             return _tool_response(f"snapshot:{counters['snapshot']}")
 
-        def browser_navigate(url: str) -> ToolResponse:
+        def browser_navigate(runtime: Any, url: str) -> ToolResponse:
             counters["navigate"] += 1
             return _tool_response(f"navigate:{url}:{counters['navigate']}")
 
@@ -106,6 +107,7 @@ class ToolDedupeTests(unittest.TestCase):
         session._interrupt_lock = threading.RLock()
         session._active_loop = None
         session._interrupt_requested = False
+        session.cost_tracker = SimpleNamespace(add_usage=lambda **kwargs: None)
 
         first = asyncio.run(session.send_async("First task"))
         second = asyncio.run(session.send_async("Second task"))

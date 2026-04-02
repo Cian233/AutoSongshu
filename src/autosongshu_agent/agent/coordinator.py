@@ -8,13 +8,10 @@ from typing import Any
 from agentscope.message import Msg
 
 from ..config import AppConfig
-from ..runtime import PentestRuntime
-from .builder import _AgentBuilderMixin
+from .harness import BaseAgentHarness
 from .prompts import _CONTINUATION_PROMPT
 from .utils import (
     _StreamLoopGuard,
-    _build_loop_guard_recovery_prompt,
-    _build_stream_event,
     _continue_response_until_settled,
     _extract_response_blocks,
     _prepare_user_message,
@@ -25,6 +22,7 @@ from .utils import (
 class RunResult:
     final_message: str
     artifact_dir: str
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -40,13 +38,11 @@ class SkillCommand:
     remaining_message: str = ""
 
 
-class PentestCoordinator(_AgentBuilderMixin):
+class PentestCoordinator(BaseAgentHarness):
     def __init__(self, config: AppConfig, sandbox_user_id: str | None = None) -> None:
-        self.config = config
-        self.runtime = PentestRuntime(config, sandbox_user_id=sandbox_user_id)
+        super().__init__(config, sandbox_user_id=sandbox_user_id)
 
     async def run_async(self, goal: str) -> RunResult:
-        agent = self._build_agent()
         stream_queue: asyncio.Queue | None = None
         stop_event: asyncio.Event | None = None
         stream_task: asyncio.Task[None] | None = None
@@ -55,65 +51,60 @@ class PentestCoordinator(_AgentBuilderMixin):
         use_loop_guard = getattr(agent_config, "loop_guard_enabled", True)
         if hasattr(self.runtime, "tool_call_cache"):
             self.runtime.tool_call_cache.reset_turn()
-        prompt = "\n".join(
-            [
-                f"User goal: {goal}",
-                f"Start URL: {self.config.engagement.start_url}",
-                "Provide a short plan, execute the assessment within the authorized scope, keep findings updated, and finish with the most important conclusions.",
-                "Default to Simplified Chinese unless the user explicitly asks for another language.",
-            ]
-        )
+        if getattr(agent_config, "mode", "auto") == "semi-auto":
+            prompt = "\n".join(
+                [
+                    f"User goal: {goal}",
+                    f"Start URL: {self.config.engagement.start_url}",
+                    "You are currently in SEMI-AUTO mode.",
+                    "Before providing a plan, you MUST perform necessary reconnaissance (e.g., use `knowledge_search` to check historical experiences, or perform preliminary probing/exploration on the target) to gather context.",
+                    "After sufficient reconnaissance, provide a clear, step-by-step plan.",
+                    "Wait for the user to approve the plan before proceeding with any sandbox mutations or executions.",
+                    "Do NOT use any execution tools (e.g., sandbox_run_python, sandbox_write_file) until explicitly approved.",
+                    "Default to Simplified Chinese unless the user explicitly asks for another language.",
+                ]
+            )
+        else:
+            prompt = "\n".join(
+                [
+                    f"User goal: {goal}",
+                    f"Start URL: {self.config.engagement.start_url}",
+                    "Before providing a plan, you MUST perform necessary reconnaissance (e.g., use `knowledge_search` to check historical experiences, or perform preliminary probing/exploration on the target) to gather context.",
+                    "After sufficient reconnaissance, provide a clear, step-by-step plan.",
+                    "Then, execute the assessment within the authorized scope according to your plan, keep findings updated, and finish with the most important conclusions.",
+                    "Default to Simplified Chinese unless the user explicitly asks for another language.",
+                ]
+            )
 
-        async def stream_agent_messages() -> None:
-            assert stream_queue is not None
-            assert stop_event is not None
-            while True:
-                if stop_event.is_set() and stream_queue.empty():
-                    return
-                try:
-                    msg, last, _speech = await asyncio.wait_for(
-                        stream_queue.get(), timeout=0.1
-                    )
-                except asyncio.TimeoutError:
-                    continue
-                if loop_guard.observe(_build_stream_event(msg, last)):
-                    with contextlib.suppress(Exception):
-                        await agent.interrupt()
-
-        async def run_agent_turn(
+        async def _run_agent_turn(
             content: str, *, allow_loop_guard_recovery: bool = True
         ) -> Msg:
-            if use_loop_guard:
-                loop_guard.reset()
-            response = await agent(
-                Msg(
-                    name="operator",
-                    role="user",
-                    content=content,
-                ),
+            return await self.run_agent_turn(
+                content,
+                use_loop_guard=use_loop_guard,
+                loop_guard=loop_guard,
+                allow_loop_guard_recovery=allow_loop_guard_recovery,
             )
-            if use_loop_guard:
-                loop_reason = loop_guard.consume_triggered_reason()
-                if loop_reason and allow_loop_guard_recovery:
-                    return await run_agent_turn(
-                        _build_loop_guard_recovery_prompt(loop_reason),
-                        allow_loop_guard_recovery=False,
-                    )
-            return response
 
         try:
             if use_loop_guard:
                 stream_queue = asyncio.Queue(maxsize=200)
                 stop_event = asyncio.Event()
-                agent.set_msg_queue_enabled(True, queue=stream_queue)
-                stream_task = asyncio.create_task(stream_agent_messages())
+                self.agent.set_msg_queue_enabled(True, queue=stream_queue)
+                stream_task = asyncio.create_task(
+                    self.stream_agent_messages(
+                        stream_queue,
+                        stop_event,
+                        loop_guard=loop_guard,
+                    )
+                )
 
-            response = await run_agent_turn(
+            response = await _run_agent_turn(
                 _prepare_user_message(prompt, self.skill_report)
             )
             assistant_message, blocks = _extract_response_blocks(response.content)
             assistant_message, blocks = await _continue_response_until_settled(
-                run_agent_turn=run_agent_turn,
+                run_agent_turn=_run_agent_turn,
                 assistant_message=assistant_message,
                 blocks=blocks,
                 continuation_prompt=_CONTINUATION_PROMPT,
@@ -122,16 +113,21 @@ class PentestCoordinator(_AgentBuilderMixin):
             return RunResult(
                 final_message=assistant_message,
                 artifact_dir=str(self.runtime.artifacts.session_dir),
+                usage={
+                    "input_tokens": self.cost_tracker.input_tokens,
+                    "output_tokens": self.cost_tracker.output_tokens,
+                    "total_tokens": self.cost_tracker.input_tokens + self.cost_tracker.output_tokens,
+                },
             )
         finally:
             if stop_event is not None:
                 stop_event.set()
             if stream_queue is not None:
-                agent.set_msg_queue_enabled(False)
+                self.agent.set_msg_queue_enabled(False)
             if stream_task is not None:
                 with contextlib.suppress(asyncio.CancelledError):
                     await stream_task
-            self.runtime.close()
+            self.close()
 
     def run(self, goal: str) -> RunResult:
         return asyncio.run(self.run_async(goal))

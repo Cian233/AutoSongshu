@@ -623,7 +623,10 @@ class ChatSessionManager:
         # We do not currently have provider-reported context-window usage here, so we
         # use the serialized message payload size as a local proxy.
         pending_chars = sum(_message_payload_size(message) for message in pending_messages)
-        return pending_chars >= self._auto_compaction_char_budget(session)
+        max_chars = self._auto_compaction_char_budget(session)
+        estimated_tokens = pending_chars // 4 + 1
+        estimated_budget = max_chars // 4 + 1
+        return estimated_tokens >= estimated_budget
 
     def _context_history_messages(
         self,

@@ -92,6 +92,7 @@ class ChatConversationRow(Base):
     artifact_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
     memory_json: Mapped[str] = mapped_column(Text, default="{}")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mode: Mapped[str] = mapped_column(String(32), default="auto")
     created_at: Mapped[str] = mapped_column(String(32))
     updated_at: Mapped[str] = mapped_column(String(32))
 
@@ -143,6 +144,13 @@ class ChatSessionStore:
                             "ALTER TABLE chat_conversations ADD COLUMN knowledge_base_ids_json TEXT DEFAULT '[]'"
                         )
                     )
+            if "mode" not in columns:
+                with self.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE chat_conversations ADD COLUMN mode VARCHAR(32) DEFAULT 'auto'"
+                        )
+                    )
 
     def _resolve_database_url(self) -> str:
         raw_url = (
@@ -191,6 +199,7 @@ class ChatSessionStore:
                 _json_loads(row.memory_json, {})
             ).model_dump(),
             "error": row.error,
+            "mode": row.mode,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
             "messages": [self._serialize_message_row(item) for item in messages],
@@ -262,6 +271,7 @@ class ChatSessionStore:
                     status=str(payload.get("status") or "idle"),
                     config_path=str(payload.get("config_path") or ""),
                     memory_json=_json_dumps(payload.get("memory") or {}),
+                    mode=str(payload.get("mode") or "auto"),
                     created_at=str(payload.get("created_at") or ""),
                     updated_at=str(payload.get("updated_at") or ""),
                 )
@@ -289,6 +299,7 @@ class ChatSessionStore:
                 ).model_dump()
             )
             row.error = payload.get("error")
+            row.mode = str(payload.get("mode") or row.mode)
             row.created_at = str(payload.get("created_at") or row.created_at)
             row.updated_at = str(payload.get("updated_at") or row.updated_at)
             session.commit()
@@ -329,15 +340,24 @@ class ChatSessionStore:
 
             row.session_id = session_id
             row.role = role
-            row.status = _normalize_message_status(
-                str(payload.get("status") or row.status)
-            )
+            row.status = _normalize_message_status(str(payload.get("status") or row.status))
             row.order_index = int(payload.get("order_index") or row.order_index)
             row.content_json = _json_dumps(content)
             row.text_content = message_text(content)
             row.error = payload.get("error")
             row.created_at = str(payload.get("created_at") or row.created_at)
             row.updated_at = str(payload.get("updated_at") or row.updated_at)
+            session.commit()
+
+    def delete_messages(self, session_id: str, message_ids: list[str]) -> None:
+        if not message_ids:
+            return
+        with self.lock, self.session_factory() as session:
+            session.execute(
+                ChatMessageRow.__table__.delete()
+                .where(ChatMessageRow.session_id == session_id)
+                .where(ChatMessageRow.message_id.in_(message_ids))
+            )
             session.commit()
 
     def _migrate_legacy_payload_sessions_if_needed(self) -> None:
@@ -422,6 +442,7 @@ class ChatSessionStore:
             "artifact_dir": payload.get("artifact_dir"),
             "memory": LayeredConversationMemory().model_dump(),
             "error": payload.get("error"),
+            "mode": "auto",
             "created_at": str(payload.get("created_at") or ""),
             "updated_at": str(payload.get("updated_at") or ""),
             "messages": messages,
@@ -438,6 +459,7 @@ class ChatSessionStore:
                 status=str(payload.get("status") or "idle"),
                 config_path=str(payload.get("config_path") or ""),
                 memory_json=_json_dumps(payload.get("memory") or {}),
+                mode=str(payload.get("mode") or "auto"),
                 created_at=str(payload.get("created_at") or ""),
                 updated_at=str(payload.get("updated_at") or ""),
             )
@@ -463,6 +485,7 @@ class ChatSessionStore:
             ).model_dump()
         )
         row.error = payload.get("error")
+        row.mode = str(payload.get("mode") or row.mode)
         row.created_at = str(payload.get("created_at") or row.created_at)
         row.updated_at = str(payload.get("updated_at") or row.updated_at)
 

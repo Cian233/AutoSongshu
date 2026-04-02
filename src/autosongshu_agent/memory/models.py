@@ -7,6 +7,17 @@ from pydantic import BaseModel, Field
 from ..utils import dedupe_strings, normalize_text, truncate_text
 
 
+class CostTracker(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_cost: float = 0.0
+
+    def add_usage(self, input_tokens: int, output_tokens: int, cost: float = 0.0) -> None:
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
+        self.total_cost += cost
+
+
 class MemoryNote(BaseModel):
     statement: str
     evidence: list[str] = Field(default_factory=list)
@@ -22,6 +33,8 @@ class SessionHandoffCard(BaseModel):
     task: str = ""
     status: str = ""
     current_focus: str = ""
+    pending_work: list[str] = Field(default_factory=list)
+    recent_requests: list[str] = Field(default_factory=list)
     instructions: list[str] = Field(default_factory=list)
     discoveries: list[str] = Field(default_factory=list)
     accomplished: list[str] = Field(default_factory=list)
@@ -39,6 +52,8 @@ class SessionHandoffCard(BaseModel):
                 self.task.strip(),
                 self.status.strip(),
                 self.current_focus.strip(),
+                self.pending_work,
+                self.recent_requests,
                 self.instructions,
                 self.discoveries,
                 self.accomplished,
@@ -65,6 +80,14 @@ class SessionHandoffCard(BaseModel):
             sections.append(f"Current status:\n{self.status.strip()}")
         if self.current_focus.strip():
             sections.append(f"Current focus:\n{self.current_focus.strip()}")
+        if self.pending_work:
+            sections.append(
+                "Pending work:\n" + "\n".join(f"- {item}" for item in self.pending_work)
+            )
+        if self.recent_requests:
+            sections.append(
+                "Recent requests:\n" + "\n".join(f"- {item}" for item in self.recent_requests)
+            )
         if self.discoveries:
             sections.append(
                 "Discoveries:\n" + "\n".join(f"- {item}" for item in self.discoveries)
@@ -113,6 +136,7 @@ class SessionHandoffCard(BaseModel):
 
 class LayeredConversationMemory(BaseModel):
     summary: str = ""
+    continuation: str = ""
     stable_conclusions: list[MemoryNote] = Field(default_factory=list)
     validated_findings: list[MemoryNote] = Field(default_factory=list)
     active_leads: list[MemoryNote] = Field(default_factory=list)
@@ -127,6 +151,7 @@ class LayeredConversationMemory(BaseModel):
         return not any(
             (
                 self.summary.strip(),
+                self.continuation.strip(),
                 self.recent_progress.strip(),
                 self.stable_conclusions,
                 self.validated_findings,
@@ -141,6 +166,8 @@ class LayeredConversationMemory(BaseModel):
         from .utils import _render_notes
 
         sections: list[str] = []
+        if self.continuation.strip():
+            sections.append(self.continuation.strip())
         if not self.handoff.is_empty():
             sections.append(self.handoff.render_for_model())
         if self.summary.strip() or self.recent_progress.strip():
@@ -190,6 +217,7 @@ class MemorySynthesisPayload(BaseModel):
 
 
 __all__ = [
+    "CostTracker",
     "MemoryNote",
     "SessionHandoffCard",
     "LayeredConversationMemory",

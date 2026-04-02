@@ -71,7 +71,8 @@ class _StreamingConversation:
             compaction=SimpleNamespace(min_turns=1, retain_recent_turns=0),
         )
         self.runtime = SimpleNamespace(
-            artifacts=SimpleNamespace(session_dir=Path("artifacts/test-session"))
+            artifacts=SimpleNamespace(session_dir=Path("artifacts/test-session")),
+            configure_knowledge_search=lambda *args, **kwargs: None,
         )
 
     def send(self, _content: str, stream_callback=None) -> ConversationReply:
@@ -131,7 +132,8 @@ class _DelayedMemoryConversation:
             compaction=SimpleNamespace(min_turns=1, retain_recent_turns=0),
         )
         self.runtime = SimpleNamespace(
-            artifacts=SimpleNamespace(session_dir=Path("artifacts/test-session"))
+            artifacts=SimpleNamespace(session_dir=Path("artifacts/test-session")),
+            configure_knowledge_search=lambda *args, **kwargs: None,
         )
         self.refresh_started = threading.Event()
         self.refresh_release = threading.Event()
@@ -179,6 +181,7 @@ class PentestConversationInterruptTests(unittest.IsolatedAsyncioTestCase):
         session._interrupt_lock = threading.RLock()
         session._active_loop = None
         session._interrupt_requested = False
+        session.cost_tracker = SimpleNamespace(add_usage=lambda **kwargs: None)
 
         self.assertFalse(session.interrupt())
 
@@ -282,6 +285,8 @@ class ChatSessionManagerInterruptTests(unittest.TestCase):
             if event.get("type") == "session.upsert"
             and event.get("session", {}).get("status") == "running"
         ]
+        
+        print("EVENTS:", events)
 
         self.assertGreaterEqual(len(running_session_events), 2)
         self.assertTrue(

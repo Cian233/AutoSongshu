@@ -384,6 +384,7 @@ class AgentConfig(BaseModel):
     parallel_tool_calls: bool = False
     enable_meta_tool: bool = False
     loop_guard_enabled: bool = True
+    mode: Literal["auto", "semi-auto"] = "auto"
 
 
 class CompactionConfig(BaseModel):
@@ -404,6 +405,7 @@ class AppConfig(BaseModel):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+    mcp_servers: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def resolve_paths(self, base_dir: Path) -> "AppConfig":
         self.artifacts.root_dir = _resolve_path(base_dir, self.artifacts.root_dir)

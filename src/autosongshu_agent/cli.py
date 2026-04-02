@@ -45,5 +45,7 @@ def main(argv: list[str] | None = None) -> int:
 
     console.print("[bold green]Agent finished[/bold green]")
     console.print(f"Artifacts: {result.artifact_dir}")
+    if hasattr(result, "usage") and result.usage:
+        console.print(f"[dim]Tokens used: {result.usage.get('input_tokens', 0)} in | {result.usage.get('output_tokens', 0)} out | {result.usage.get('total_tokens', 0)} total[/dim]")
     console.print(result.final_message)
     return 0

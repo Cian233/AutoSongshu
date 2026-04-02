@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -12,45 +11,35 @@ from agentscope.message import Msg
 from ..config import AppConfig
 from ..memory import (
     LayeredConversationMemory,
-    MemorySynthesisPayload,
-    SessionHandoffCard,
     build_memory_fallback,
     now_iso as memory_now_iso,
     sync_validated_findings,
 )
-from ..runtime import PentestRuntime
-from .builder import _AgentBuilderMixin
+from .harness import BaseAgentHarness
 from .coordinator import ConversationReply
-from .prompts import _CONTINUATION_PROMPT, _MEMORY_SYSTEM_PROMPT
+from .prompts import _CONTINUATION_PROMPT
 from .utils import (
     _StreamLoopGuard,
-    _build_loop_guard_recovery_prompt,
-    _build_stream_event,
     _continue_response_until_settled,
     _extract_response_blocks,
     _prepare_user_message,
 )
 
 
-class PentestConversationSession(_AgentBuilderMixin):
+class PentestConversationSession(BaseAgentHarness):
     def __init__(
         self,
         config: AppConfig,
         artifact_session_name: str | None = None,
         sandbox_user_id: str | None = None,
     ) -> None:
-        self.config = config
-        self.runtime = PentestRuntime(
+        super().__init__(
             config,
             artifact_session_name=artifact_session_name,
             sandbox_user_id=sandbox_user_id,
         )
-        self._interrupt_lock = threading.RLock()
-        self._active_loop: asyncio.AbstractEventLoop | None = None
-        self._interrupt_requested = False
         self._memory_context = ""
         self.memory_model = self._build_memory_model()
-        self.agent = self._build_agent()
 
     async def observe_history_async(self, messages: list[Msg]) -> None:
         if not messages:
@@ -110,63 +99,12 @@ class PentestConversationSession(_AgentBuilderMixin):
             self.runtime.artifacts.write_json("memory.json", updated.model_dump())
             self.runtime.update_session_metadata({"memory": updated.model_dump()})
             return updated
-
-        payload = {
-            "existing_memory": existing_memory.model_dump(),
-            "validated_findings": [item.model_dump() for item in validated_findings],
-            "transcript_delta": transcript_payload,
-        }
-        messages = [
-            {"role": "system", "content": _MEMORY_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": json.dumps(
-                    payload, ensure_ascii=False, indent=2, default=str
-                ),
-            },
-        ]
-
-        try:
-            response = await self.memory_model(
-                messages, structured_model=MemorySynthesisPayload
-            )
-            synthesized = MemorySynthesisPayload.model_validate(response.metadata or {})
-            updated = LayeredConversationMemory(
-                summary=synthesized.summary.strip(),
-                stable_conclusions=synthesized.stable_conclusions,
-                validated_findings=validated_findings,
-                active_leads=synthesized.active_leads,
-                dead_ends=synthesized.dead_ends,
-                next_focus=[
-                    item.strip() for item in synthesized.next_focus if str(item).strip()
-                ],
-                recent_progress=synthesized.recent_progress.strip(),
-                handoff=synthesized.handoff or SessionHandoffCard(),
-                anchor_message_id=anchor_message_id
-                or existing_memory.anchor_message_id,
-                updated_at=memory_now_iso(),
-            )
-            if updated.is_empty() and (transcript_payload or validated_findings):
-                updated = build_memory_fallback(
-                    existing_memory,
-                    transcript_payload,
-                    validated_findings,
-                    anchor_message_id,
-                )
-            elif updated.handoff.is_empty():
-                updated.handoff = build_memory_fallback(
-                    updated,
-                    transcript_payload,
-                    validated_findings,
-                    anchor_message_id,
-                ).handoff
-        except Exception:
-            updated = build_memory_fallback(
-                existing_memory,
-                transcript_payload,
-                validated_findings,
-                anchor_message_id,
-            )
+        updated = build_memory_fallback(
+            existing_memory,
+            transcript_payload,
+            validated_findings,
+            anchor_message_id,
+        )
 
         updated.anchor_message_id = anchor_message_id or updated.anchor_message_id
         updated.updated_at = updated.updated_at or memory_now_iso()
@@ -189,28 +127,6 @@ class PentestConversationSession(_AgentBuilderMixin):
             ),
         )
 
-    async def _stream_agent_messages(
-        self,
-        queue: asyncio.Queue,
-        stop_event: asyncio.Event,
-        stream_callback: Callable[[dict[str, Any]], None] | None,
-        loop_guard: _StreamLoopGuard | None = None,
-    ) -> None:
-        while True:
-            if stop_event.is_set() and queue.empty():
-                return
-            try:
-                msg, last, _speech = await asyncio.wait_for(queue.get(), timeout=0.1)
-            except asyncio.TimeoutError:
-                continue
-            event = _build_stream_event(msg, last)
-            if loop_guard is not None and loop_guard.observe(event):
-                with contextlib.suppress(Exception):
-                    await self.agent.interrupt()
-            if stream_callback is not None:
-                with contextlib.suppress(Exception):
-                    stream_callback(event)
-
     async def send_async(
         self,
         user_message: str,
@@ -232,7 +148,7 @@ class PentestConversationSession(_AgentBuilderMixin):
             stop_event = asyncio.Event()
             self.agent.set_msg_queue_enabled(True, queue=stream_queue)
             stream_task = asyncio.create_task(
-                self._stream_agent_messages(
+                self.stream_agent_messages(
                     stream_queue,
                     stop_event,
                     stream_callback,
@@ -240,37 +156,18 @@ class PentestConversationSession(_AgentBuilderMixin):
                 ),
             )
 
-        async def run_agent_turn(
+        async def _run_agent_turn(
             content: str, *, allow_loop_guard_recovery: bool = True
         ) -> Msg:
-            if use_loop_guard:
-                loop_guard.reset()
-            response_task = asyncio.create_task(
-                self.agent(
-                    Msg(
-                        name="operator",
-                        role="user",
-                        content=content,
-                    ),
-                ),
+            return await self.run_agent_turn(
+                content,
+                use_loop_guard=use_loop_guard,
+                loop_guard=loop_guard,
+                allow_loop_guard_recovery=allow_loop_guard_recovery,
             )
-            with self._interrupt_lock:
-                interrupt_requested = self._interrupt_requested
-            if interrupt_requested:
-                await asyncio.sleep(0)
-                await self.agent.interrupt()
-            response = await response_task
-            if use_loop_guard:
-                loop_reason = loop_guard.consume_triggered_reason()
-                if loop_reason and allow_loop_guard_recovery:
-                    return await run_agent_turn(
-                        _build_loop_guard_recovery_prompt(loop_reason),
-                        allow_loop_guard_recovery=False,
-                    )
-            return response
 
         try:
-            response = await run_agent_turn(
+            response = await _run_agent_turn(
                 _prepare_user_message(
                     user_message,
                     self.skill_report,
@@ -279,7 +176,7 @@ class PentestConversationSession(_AgentBuilderMixin):
             )
             assistant_message, blocks = _extract_response_blocks(response.content)
             assistant_message, blocks = await _continue_response_until_settled(
-                run_agent_turn=run_agent_turn,
+                run_agent_turn=_run_agent_turn,
                 assistant_message=assistant_message,
                 blocks=blocks,
                 continuation_prompt=_CONTINUATION_PROMPT,
@@ -310,22 +207,5 @@ class PentestConversationSession(_AgentBuilderMixin):
         return asyncio.run(
             self.send_async(user_message, stream_callback=stream_callback)
         )
-
-    def interrupt(self) -> bool:
-        with self._interrupt_lock:
-            self._interrupt_requested = True
-            loop = self._active_loop
-
-        if loop is None or loop.is_closed():
-            return False
-        try:
-            asyncio.run_coroutine_threadsafe(self.agent.interrupt(), loop)
-        except RuntimeError:
-            return False
-        return True
-
-    def close(self) -> None:
-        self.runtime.close()
-
 
 __all__ = ["PentestConversationSession"]

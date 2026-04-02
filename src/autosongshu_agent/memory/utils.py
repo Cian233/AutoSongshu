@@ -3,20 +3,50 @@ from __future__ import annotations
 import json
 from collections import Counter
 from copy import deepcopy
+from datetime import datetime
 from typing import Any
 
 from ..message_blocks import assistant_preview_text, normalize_message_content
 from ..models import Finding
 from ..utils import (
-    dedupe_strings,
     extract_absolute_urls,
     merge_priority_strings,
-    now_iso,
     normalize_text,
-    stable_json,
-    truncate_text,
 )
 from .models import MemoryNote, SessionHandoffCard
+
+
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _truncate(text: str, limit: int = 320) -> str:
+    value = str(text or "").strip()
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    return f"{value[: limit - 3]}..."
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = normalize_text(raw)
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(value)
+    return deduped
+
 
 
 def _user_text_preview(content: list[dict[str, Any]]) -> str:
@@ -26,7 +56,7 @@ def _user_text_preview(content: list[dict[str, Any]]) -> str:
         if str(part.get("type") or "").strip().lower() == "input_text"
         and str(part.get("text") or "").strip()
     )
-    return truncate_text(text, 600)
+    return _truncate(text, 600)
 
 
 def _render_notes(title: str, notes: list[MemoryNote]) -> str:
@@ -76,7 +106,7 @@ def sync_validated_findings(
         if finding.url:
             evidence.append(f"URL: {finding.url}")
         evidence.extend(
-            truncate_text(item, 220)
+            _truncate(item, 220)
             for item in finding.evidence
             if normalize_text(item)
         )
@@ -137,12 +167,12 @@ def _tool_activity_digest(content: list[dict[str, Any]]) -> list[dict[str, Any]]
     for part in content:
         part_type = str(part.get("type") or "").strip().lower()
         if part_type == "tool_call":
-            key = f"{part.get('name') or 'tool'}::{stable_json(part.get('arguments') or {})}"
+            key = f"{part.get('name') or 'tool'}::{_stable_json(part.get('arguments') or {})}"
             call_counter[key] += 1
             continue
 
         if part_type == "tool_result":
-            result_text = truncate_text(
+            result_text = _truncate(
                 "\n".join(
                     str(item.get("text") or "").strip()
                     for item in part.get("content") or []
@@ -192,8 +222,8 @@ def _dead_end_notes_from_transcript(
                 continue
             tool_name = str(activity.get("name") or "tool")
             if str(activity.get("type") or "").strip().lower() == "tool_call":
-                arguments_preview = truncate_text(
-                    stable_json(activity.get("arguments") or {}), 220
+                arguments_preview = _truncate(
+                    _stable_json(activity.get("arguments") or {}), 220
                 )
                 notes.append(
                     MemoryNote(
@@ -205,7 +235,7 @@ def _dead_end_notes_from_transcript(
                     ),
                 )
                 continue
-            result_preview = truncate_text(
+            result_preview = _truncate(
                 str(activity.get("result_preview") or ""), 220
             )
             notes.append(
@@ -263,31 +293,31 @@ def _extract_relevant_files_from_transcript(
                 normalized = _normalize_file_hint(arguments.get(key))
                 if normalized:
                     hints.append(normalized)
-    return dedupe_strings(hints)[:10]
+    return _dedupe_strings(hints)[:10]
 
 
 def _instruction_hints_from_transcript(
     transcript_payload: list[dict[str, Any]], *, limit: int = 6
 ) -> list[str]:
     user_texts = [
-        truncate_text(str(entry.get("text") or ""), 220)
+        _truncate(str(entry.get("text") or ""), 220)
         for entry in transcript_payload
         if str(entry.get("role") or "").strip().lower() == "user"
         and normalize_text(str(entry.get("text") or ""))
     ]
-    return dedupe_strings(user_texts)[-limit:]
+    return _dedupe_strings(user_texts)[-limit:]
 
 
 def _discovery_hints_from_transcript(
     transcript_payload: list[dict[str, Any]], *, limit: int = 4
 ) -> list[str]:
     assistant_texts = [
-        truncate_text(str(entry.get("text") or ""), 220)
+        _truncate(str(entry.get("text") or ""), 220)
         for entry in transcript_payload
         if str(entry.get("role") or "").strip().lower() == "assistant"
         and normalize_text(str(entry.get("text") or ""))
     ]
-    return dedupe_strings(assistant_texts)[-limit:]
+    return _dedupe_strings(assistant_texts)[-limit:]
 
 
 def _accomplished_hints_from_transcript(
@@ -301,7 +331,7 @@ def _accomplished_hints_from_transcript(
             name = normalize_text(str(activity.get("name") or ""))
             if name:
                 tool_names.append(name)
-    unique_names = dedupe_strings(tool_names)
+    unique_names = _dedupe_strings(tool_names)
     if not unique_names:
         return []
     return [f"Recently executed or inspected via tools: {', '.join(unique_names[:8])}"]
@@ -313,6 +343,8 @@ def _build_handoff_card(
     task: str = "",
     status: str = "",
     current_focus: str = "",
+    pending_work: list[str] | None = None,
+    recent_requests: list[str] | None = None,
     instructions: list[str] | None = None,
     discoveries: list[str] | None = None,
     accomplished: list[str] | None = None,
@@ -327,6 +359,12 @@ def _build_handoff_card(
         task=normalize_text(task) or existing_handoff.task,
         status=normalize_text(status) or existing_handoff.status,
         current_focus=normalize_text(current_focus) or existing_handoff.current_focus,
+        pending_work=merge_priority_strings(
+            list(pending_work or []), list(existing_handoff.pending_work or [])
+        ),
+        recent_requests=merge_priority_strings(
+            list(recent_requests or []), list(existing_handoff.recent_requests or [])
+        ),
         instructions=merge_priority_strings(
             list(instructions or []), list(existing_handoff.instructions or [])
         ),
@@ -373,6 +411,11 @@ def build_memory_fallback(
     anchor_message_id: str | None,
 ) -> "LayeredConversationMemory":
     from .models import LayeredConversationMemory
+    from .compaction import (
+        build_compact_summary,
+        get_compact_continuation_message,
+        infer_pending_work,
+    )
 
     updated = existing_memory.model_copy(deep=True)
     updated.validated_findings = _dedupe_notes(validated_findings)
@@ -399,7 +442,15 @@ def build_memory_fallback(
         original_task = normalize_text(str(user_entries[0].get("text") or ""))
 
     if latest_assistant_text:
-        updated.recent_progress = truncate_text(latest_assistant_text, 420)
+        updated.recent_progress = _truncate(latest_assistant_text, 420)
+
+    if transcript_payload:
+        compact_summary = build_compact_summary(transcript_payload)
+        updated.continuation = get_compact_continuation_message(
+            compact_summary,
+            suppress_follow_up_questions=True,
+            recent_messages_preserved=True,
+        )
 
     updated.dead_ends = _dedupe_notes(
         [*updated.dead_ends, *_dead_end_notes_from_transcript(transcript_payload)]
@@ -409,11 +460,11 @@ def build_memory_fallback(
         if updated.validated_findings:
             updated.summary = f"Currently confirmed {len(updated.validated_findings)} validated findings."
         elif latest_assistant_text:
-            updated.summary = truncate_text(latest_assistant_text, 220)
+            updated.summary = _truncate(latest_assistant_text, 220)
 
     if not updated.next_focus and latest_user_text:
         updated.next_focus = [
-            truncate_text(
+            _truncate(
                 f"Continue from the latest user objective: {latest_user_text}", 220
             )
         ]
@@ -433,6 +484,9 @@ def build_memory_fallback(
     avoid_repeating = [note.normalized_statement() for note in updated.dead_ends]
     next_steps = [item.strip() for item in updated.next_focus if str(item).strip()]
     instructions = _instruction_hints_from_transcript(transcript_payload)
+    instructions.append("<continuation_prompt>这是一次接续会话，请继续完成 Pending Work，无须再次询问用户。</continuation_prompt>")
+    from ..agent.prompts import _CONTINUATION_PROMPT
+    instructions.append(_CONTINUATION_PROMPT)
     discoveries = merge_priority_strings(
         [*confirmed_facts, *_discovery_hints_from_transcript(transcript_payload)],
         [],
@@ -440,6 +494,8 @@ def build_memory_fallback(
     )
     accomplished = _accomplished_hints_from_transcript(transcript_payload)
     relevant_files = _extract_relevant_files_from_transcript(transcript_payload)
+    recent_requests = _instruction_hints_from_transcript(transcript_payload, limit=3)
+    pending_work = infer_pending_work(transcript_payload, limit=3)
 
     updated.handoff = _build_handoff_card(
         existing_memory.handoff,
@@ -448,6 +504,8 @@ def build_memory_fallback(
         current_focus=latest_user_text
         or updated.recent_progress
         or latest_assistant_text,
+        pending_work=pending_work,
+        recent_requests=recent_requests,
         instructions=instructions,
         discoveries=discoveries,
         accomplished=accomplished,

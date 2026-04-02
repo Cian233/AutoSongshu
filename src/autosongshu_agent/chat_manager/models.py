@@ -226,6 +226,7 @@ class ChatSessionState:
     interrupt_requested: bool = False
     memory_refresh_revision: int = 0
     is_compacting: bool = False
+    mode: str = "auto"
 
     def last_message_text(self) -> str:
         for message in reversed(self.messages):
@@ -247,6 +248,7 @@ class ChatSessionState:
             "start_url": self.start_url,
             "error": self.error,
             "is_compacting": self.is_compacting,
+            "mode": self.mode,
             "memory_summary": self.memory.handoff.status or self.memory.summary,
             "knowledge_base_ids": list(self.knowledge_base_ids),
             "knowledge_base_count": len(self.knowledge_base_ids),
@@ -287,6 +289,7 @@ class ChatSessionState:
             "knowledge_base_ids": list(self.knowledge_base_ids),
             "artifact_dir": self.artifact_dir,
             "error": self.error,
+            "mode": self.mode,
             "memory": self.memory.model_dump(),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -315,6 +318,7 @@ class ChatSessionState:
             updated_at=str(payload.get("updated_at") or now_iso()),
             artifact_dir=payload.get("artifact_dir"),
             error=payload.get("error"),
+            mode=str(payload.get("mode") or "auto"),
             memory=LayeredConversationMemory.model_validate(
                 payload.get("memory") or {}
             ),
@@ -343,6 +347,7 @@ class CreateChatSessionRequest(BaseModel):
     engagement_notes: str | None = None
     skill_dirs: list[str] = Field(default_factory=list)
     knowledge_base_ids: list[str] = Field(default_factory=list)
+    mode: str = "auto"
 
 
 class SendMessageRequest(BaseModel):
