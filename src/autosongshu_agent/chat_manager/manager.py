@@ -34,6 +34,11 @@ from ..message_blocks import (
     merge_assistant_content,
     part_to_agent_block,
 )
+from ..permissions import (
+    InteractivePermissionInterceptor,
+    ToolPermissionContext,
+    build_default_permission_context,
+)
 from .store import ChatSessionStore
 from ..utils import (
     extract_absolute_urls,
@@ -112,7 +117,13 @@ class ChatSessionManager:
         self.chat_sessions: dict[str, ChatSessionState] = {}
         self.counter = 0
         self.listeners: dict[str, Callable[[dict[str, Any]], None]] = {}
+        self._permission_interceptor_factory: Callable[[str], Any] | None = None
         self._load_persisted_sessions()
+
+    def set_permission_interceptor_factory(
+        self, factory: Callable[[str], Any] | None
+    ) -> None:
+        self._permission_interceptor_factory = factory
 
     def _next_session_id(self) -> str:
         with self.lock:
@@ -459,26 +470,32 @@ class ChatSessionManager:
         session.memory = updated_memory
         self._persist_session_state(session)
 
-    def _apply_physical_compaction(self, session: ChatSessionState, anchor_message_id: str, updated_memory: LayeredConversationMemory) -> None:
+    def _apply_physical_compaction(
+        self,
+        session: ChatSessionState,
+        anchor_message_id: str,
+        updated_memory: LayeredConversationMemory,
+    ) -> None:
         anchor_idx = -1
         for i, msg in enumerate(session.messages):
             if msg.id == anchor_message_id:
                 anchor_idx = i
                 break
-        
+
         if anchor_idx == -1:
             return
-            
-        messages_to_delete = [m.id for m in session.messages[:anchor_idx + 1]]
-        
+
+        messages_to_delete = [m.id for m in session.messages[: anchor_idx + 1]]
+
         # Create a system message containing the summary
         from ..memory.compaction import get_compact_continuation_message
+
         continuation_text = get_compact_continuation_message(
             updated_memory.summary,
             suppress_follow_up_questions=True,
-            recent_messages_preserved=True
+            recent_messages_preserved=True,
         )
-        
+
         system_message = ChatMessage(
             id=uuid4().hex,
             role="system",
@@ -486,17 +503,17 @@ class ChatSessionManager:
             status="completed",
             created_at=now_iso(),
             updated_at=now_iso(),
-            order_index=0
+            order_index=0,
         )
-        
+
         # Keep only the messages after the anchor, prepend the system message
-        session.messages = [system_message] + session.messages[anchor_idx + 1:]
-        
+        session.messages = [system_message] + session.messages[anchor_idx + 1 :]
+
         # Update order index
         for i, msg in enumerate(session.messages):
             msg.order_index = i + 1
             self._persist_message(session.session_id, msg)
-            
+
         # Delete old messages from store
         self.session_store.delete_messages(session.session_id, messages_to_delete)
 
@@ -511,8 +528,10 @@ class ChatSessionManager:
                     return
                 session.memory = updated_memory
                 session.is_compacting = False
-                
-                self._apply_physical_compaction(session, job.anchor_message_id, updated_memory)
+
+                self._apply_physical_compaction(
+                    session, job.anchor_message_id, updated_memory
+                )
                 self._persist_session_state(session)
             self._emit_session(session)
         with self.lock:
@@ -613,8 +632,15 @@ class ChatSessionManager:
         if session.skill_dirs:
             config.skills.directories.extend(session.skill_dirs)
         config.agent.mode = session.mode
+        permission_interceptor = None
+        if self._permission_interceptor_factory is not None:
+            permission_interceptor = self._permission_interceptor_factory(
+                session.session_id
+            )
         return PentestConversationSession(
-            config, artifact_session_name=artifact_session_name
+            config,
+            artifact_session_name=artifact_session_name,
+            permission_interceptor=permission_interceptor,
         )
 
     def _ensure_conversation_ready(
@@ -1157,20 +1183,28 @@ class ChatSessionManager:
                     except Exception:
                         pass
                     session.conversation = None
-                assistant_message.content = [{"type": "output_text", "text": "会话历史已清空。"}]
+                assistant_message.content = [
+                    {"type": "output_text", "text": "会话历史已清空。"}
+                ]
                 session.messages.extend([user_message, assistant_message])
 
             elif command == "/stats":
                 usage_text = "未找到 Token 消耗统计。"
-                if session.conversation is not None and hasattr(session.conversation, "cost_tracker"):
+                if session.conversation is not None and hasattr(
+                    session.conversation, "cost_tracker"
+                ):
                     tracker = session.conversation.cost_tracker
+                    summary = tracker.summary_dict()
                     usage_text = (
                         f"**Token 消耗统计**\n"
-                        f"- Input Tokens: {tracker.input_tokens}\n"
-                        f"- Output Tokens: {tracker.output_tokens}\n"
-                        f"- Total Tokens: {tracker.input_tokens + tracker.output_tokens}"
+                        f"- Input Tokens: {summary['input_tokens']}\n"
+                        f"- Output Tokens: {summary['output_tokens']}\n"
+                        f"- Total Tokens: {summary['total_tokens']}\n"
+                        f"- Events: {summary['event_count']}"
                     )
-                assistant_message.content = [{"type": "output_text", "text": usage_text}]
+                assistant_message.content = [
+                    {"type": "output_text", "text": usage_text}
+                ]
                 session.messages.extend([user_message, assistant_message])
 
             elif command == "/compact":
@@ -1181,7 +1215,9 @@ class ChatSessionManager:
                     self._process_slash_compact, session_id, assistant_message.id
                 )
             else:
-                assistant_message.content = [{"type": "output_text", "text": f"未知命令: {command}"}]
+                assistant_message.content = [
+                    {"type": "output_text", "text": f"未知命令: {command}"}
+                ]
                 session.messages.extend([user_message, assistant_message])
 
             session.updated_at = timestamp
@@ -1195,7 +1231,9 @@ class ChatSessionManager:
         self._emit_message(session_id, assistant_message)
         return detail
 
-    def _process_slash_compact(self, session_id: str, assistant_message_id: str) -> None:
+    def _process_slash_compact(
+        self, session_id: str, assistant_message_id: str
+    ) -> None:
         try:
             with self.lock:
                 session = self.chat_sessions.get(session_id)
@@ -1206,7 +1244,7 @@ class ChatSessionManager:
                     session,
                     conversation,
                 )
-            
+
             if job is None:
                 # Fallback: force refresh by tricking the logic or just returning
                 # Actually, we can manually create a job ignoring conditions
@@ -1214,34 +1252,48 @@ class ChatSessionManager:
                     pending_messages = self._context_history_messages(session)
                     if not pending_messages:
                         raise RuntimeError("没有可供压缩的会话历史。")
-                    compactable_messages, _ = self._split_compaction_messages(session, pending_messages)
+                    compactable_messages, _ = self._split_compaction_messages(
+                        session, pending_messages
+                    )
                     if not compactable_messages:
                         compactable_messages = pending_messages
-                    
-                    assistant_messages = [m for m in compactable_messages if m.role == "assistant"]
-                    anchor_message_id = assistant_messages[-1].id if assistant_messages else session.memory.anchor_message_id
+
+                    assistant_messages = [
+                        m for m in compactable_messages if m.role == "assistant"
+                    ]
+                    anchor_message_id = (
+                        assistant_messages[-1].id
+                        if assistant_messages
+                        else session.memory.anchor_message_id
+                    )
                     job = _MemoryRefreshJob(
                         session_id=session.session_id,
                         conversation=conversation,
                         existing_memory=session.memory.model_copy(deep=True),
-                        transcript_payload=build_memory_transcript_payload(compactable_messages),
+                        transcript_payload=build_memory_transcript_payload(
+                            compactable_messages
+                        ),
                         anchor_message_id=anchor_message_id or "",
                         revision=session.memory_refresh_revision + 1,
                     )
-            
+
             updated_memory = self._execute_memory_refresh_job(job)
-            
+
             with self.lock:
                 session = self.chat_sessions.get(session_id)
                 if session is None:
                     return
                 session.memory = updated_memory
                 session.memory_refresh_revision = job.revision
-                
-                self._apply_physical_compaction(session, job.anchor_message_id, updated_memory)
-                
+
+                self._apply_physical_compaction(
+                    session, job.anchor_message_id, updated_memory
+                )
+
                 assistant_message = self._find_message(session, assistant_message_id)
-                assistant_message.content = [{"type": "output_text", "text": "会话记忆已手动压缩完成。"}]
+                assistant_message.content = [
+                    {"type": "output_text", "text": "会话记忆已手动压缩完成。"}
+                ]
                 assistant_message.status = "completed"
                 assistant_message.updated_at = now_iso()
                 session.status = "idle"
@@ -1249,7 +1301,7 @@ class ChatSessionManager:
                 session.updated_at = assistant_message.updated_at
                 self._persist_session_state(session)
                 self._persist_message(session_id, assistant_message)
-            
+
             self._emit_session(session)
             self._emit_message(session_id, assistant_message)
         except Exception as exc:
@@ -1258,7 +1310,9 @@ class ChatSessionManager:
                 if session is None:
                     return
                 assistant_message = self._find_message(session, assistant_message_id)
-                assistant_message.content = [{"type": "output_text", "text": f"记忆压缩失败: {exc}"}]
+                assistant_message.content = [
+                    {"type": "output_text", "text": f"记忆压缩失败: {exc}"}
+                ]
                 assistant_message.status = "failed"
                 assistant_message.error = str(exc)
                 assistant_message.updated_at = now_iso()
@@ -1461,6 +1515,9 @@ class ChatSessionManager:
                     assistant_message.content = [
                         {"type": "output_text", "text": str(exc)}
                     ]
+                assistant_message.content = finalize_completed_assistant_content(
+                    assistant_message.content
+                )
                 assistant_message.status = "failed"
                 assistant_message.error = str(exc)
                 assistant_message.updated_at = now_iso()

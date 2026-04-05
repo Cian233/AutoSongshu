@@ -5,7 +5,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 import uvicorn
@@ -28,6 +28,12 @@ from .knowledge_store import (
     KnowledgeBaseUpdateDraft,
     KnowledgeDocumentDraft,
 )
+from .interactive import InteractiveApprovalManager
+from .permissions import (
+    InteractivePermissionInterceptor,
+    build_default_permission_context,
+)
+from .commands import CommandRegistry, default_command_registry
 
 
 class KnowledgeHitTestingRequest(BaseModel):
@@ -35,6 +41,32 @@ class KnowledgeHitTestingRequest(BaseModel):
     knowledge_base_id: str | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
     limit: int = Field(default=6, ge=1, le=20)
+
+
+class ApprovalResponsePayload(BaseModel):
+    approved: bool
+    reason: str = ""
+    remember_for_session: bool = False
+
+
+_approval_manager: InteractiveApprovalManager | None = None
+
+
+def get_approval_manager() -> InteractiveApprovalManager:
+    global _approval_manager
+    if _approval_manager is None:
+        _approval_manager = InteractiveApprovalManager()
+    return _approval_manager
+
+
+def set_approval_emit_callback(
+    callback: Callable[[str, dict[str, Any]], None] | None,
+) -> None:
+    global _approval_manager
+    if _approval_manager is None:
+        _approval_manager = InteractiveApprovalManager(emit_callback=callback)
+    else:
+        _approval_manager.emit_callback = callback
 
 
 def _project_root() -> Path:
@@ -138,6 +170,31 @@ class SSEHub:
             queue.put_nowait(payload)
 
 
+def create_permission_interceptor_factory(
+    approval_manager: InteractiveApprovalManager,
+) -> Callable[[str], InteractivePermissionInterceptor]:
+    def factory(session_id: str) -> InteractivePermissionInterceptor:
+        def approval_callback(tool_name: str, arguments: dict[str, Any]) -> bool:
+            try:
+                response = approval_manager.request_approval(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    risk_level="high",
+                    session_id=session_id,
+                )
+                return response.approved
+            except Exception:
+                return False
+
+        context = build_default_permission_context(require_approval_for_high_risk=True)
+        return InteractivePermissionInterceptor(
+            context=context,
+            approval_callback=approval_callback,
+        )
+
+    return factory
+
+
 def create_app() -> FastAPI:
     project_root = _project_root()
     web_root = Path(__file__).resolve().parent / "web"
@@ -146,16 +203,27 @@ def create_app() -> FastAPI:
     templates.env.auto_reload = True
     manager = ChatSessionManager(project_root=project_root)
     hub = SSEHub()
+    approval_manager = get_approval_manager()
     default_goal = "继续评估登录、账号与会话流程中的常见 Web 安全问题。"
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         hub.attach_loop(asyncio.get_running_loop())
         listener_id = manager.add_listener(hub.broadcast_threadsafe)
+        set_approval_emit_callback(
+            lambda event_type, payload: hub.broadcast_threadsafe(
+                {"type": event_type, **payload}
+            )
+        )
+        manager.set_permission_interceptor_factory(
+            create_permission_interceptor_factory(approval_manager)
+        )
         try:
             yield
         finally:
             manager.remove_listener(listener_id)
+            set_approval_emit_callback(None)
+            manager.set_permission_interceptor_factory(None)
             manager.shutdown()
 
     app = FastAPI(title="AutoSongshu Chat", version="0.3.0", lifespan=lifespan)
@@ -317,6 +385,20 @@ def create_app() -> FastAPI:
     async def list_authorizations() -> dict[str, Any]:
         authorizations = manager.list_authorizations()
         return {"authorizations": authorizations, "total": len(authorizations)}
+
+    @app.get("/api/commands")
+    async def list_commands() -> dict[str, Any]:
+        commands = default_command_registry.list_commands()
+        items = []
+        for cmd in commands:
+            item = {
+                "name": cmd.name,
+                "description": cmd.description,
+                "aliases": cmd.aliases,
+                "usage": cmd.usage or "",
+            }
+            items.append(item)
+        return {"commands": items, "total": len(items)}
 
     @app.post("/api/authorizations")
     async def create_authorization(payload: AuthorizationDraft) -> dict[str, Any]:
@@ -534,6 +616,47 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/chat/approvals/pending")
+    async def list_pending_approvals() -> dict[str, Any]:
+        approval_manager = get_approval_manager()
+        pending = approval_manager.get_pending_requests()
+        return {"pending": [req.to_dict() for req in pending]}
+
+    @app.post("/api/chat/approvals/{request_id}/respond")
+    async def respond_to_approval(
+        request_id: str,
+        payload: ApprovalResponsePayload,
+    ) -> dict[str, Any]:
+        approval_manager = get_approval_manager()
+        success = approval_manager.respond_to_approval(
+            request_id=request_id,
+            approved=payload.approved,
+            reason=payload.reason,
+            remember_for_session=payload.remember_for_session,
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Approval request not found: {request_id}",
+            )
+        return {"success": True, "request_id": request_id, "approved": payload.approved}
+
+    @app.post("/api/chat/approvals/{request_id}/cancel")
+    async def cancel_approval(request_id: str) -> dict[str, Any]:
+        approval_manager = get_approval_manager()
+        success = approval_manager.cancel_approval(request_id)
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Approval request not found: {request_id}",
+            )
+        return {"success": True, "request_id": request_id}
+
+    @app.get("/api/chat/approvals/stats")
+    async def approval_stats() -> dict[str, Any]:
+        approval_manager = get_approval_manager()
+        return approval_manager.get_stats()
 
     @app.post("/api/chat/sessions/{session_id}/knowledge-documents")
     async def create_session_knowledge_document(

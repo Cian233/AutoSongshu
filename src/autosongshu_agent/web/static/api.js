@@ -30,6 +30,70 @@ let lastRenderTime = 0;
 let perfEnabled = false;
 let realtimeResyncNeeded = false;
 let recoveryPromise = null;
+let currentApprovalRequestId = null;
+
+function showApprovalModal(request) {
+  const modal = byId("approval-modal");
+  if (!modal || !request) {
+    return;
+  }
+  currentApprovalRequestId = request.request_id;
+  const setText = (id, text) => {
+    const el = byId(id);
+    if (el) el.textContent = text;
+  };
+  setText("approval-tool-name", request.tool_name || "-");
+  setText("approval-arguments", JSON.stringify(request.arguments || {}, null, 2));
+  setText("approval-request-id", request.request_id || "-");
+  setText("approval-session-id", request.session_id || "-");
+  setText("approval-timeout-seconds", String(request.timeout_seconds || 300));
+  const riskBadge = byId("approval-risk-badge");
+  if (riskBadge) {
+    const level = String(request.risk_level || "medium").toLowerCase();
+    riskBadge.textContent = level === "critical" ? "严重风险" : level === "high" ? "高风险" : level === "medium" ? "中等风险" : "低风险";
+    riskBadge.classList.remove("is-medium", "is-high", "is-critical");
+    if (level === "medium") {
+      riskBadge.classList.add("is-medium");
+    } else if (level === "high") {
+      riskBadge.classList.add("is-high");
+    } else if (level === "critical") {
+      riskBadge.classList.add("is-critical");
+    }
+  }
+  const rememberCheckbox = byId("approval-remember-session");
+  if (rememberCheckbox) {
+    rememberCheckbox.checked = false;
+  }
+  modal.hidden = false;
+  document.body.classList.add("modal-open");
+}
+
+function hideApprovalModal() {
+  const modal = byId("approval-modal");
+  if (modal) {
+    modal.hidden = true;
+  }
+  currentApprovalRequestId = null;
+  document.body.classList.remove("modal-open");
+}
+
+async function respondToApproval(approved) {
+  if (!currentApprovalRequestId) {
+    return;
+  }
+  const rememberCheckbox = byId("approval-remember-session");
+  const remember_for_session = rememberCheckbox ? rememberCheckbox.checked : false;
+  try {
+    await fetchJson(`/api/chat/approvals/${encodeURIComponent(currentApprovalRequestId)}/respond`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approved, reason: "", remember_for_session }),
+    });
+  } catch (error) {
+    window.alert(`审批响应失败：${String(error.message || error)}`);
+  }
+  hideApprovalModal();
+}
 
 export function setPerformanceMonitoring(enabled) {
   perfEnabled = Boolean(enabled);
@@ -443,6 +507,15 @@ export function connectRealtime() {
     }
   });
 
+  eventSource.addEventListener("approval.request", (event) => {
+    const payload = JSON.parse(event.data);
+    showApprovalModal(payload);
+  });
+
+  eventSource.addEventListener("approval.response", (event) => {
+    hideApprovalModal();
+  });
+
   eventSource.onerror = () => {
     if (state.eventSource !== eventSource) {
       return;
@@ -571,4 +644,172 @@ export async function submitMessage(event) {
     state.isSubmitting = false;
     renderApp();
   }
+}
+
+export function wireApprovalButtons() {
+  const approveButton = byId("approval-approve-button");
+  const denyButton = byId("approval-deny-button");
+  const backdrop = byId("approval-backdrop");
+  if (approveButton) {
+    approveButton.addEventListener("click", () => {
+      respondToApproval(true);
+    });
+  }
+  if (denyButton) {
+    denyButton.addEventListener("click", () => {
+      respondToApproval(false);
+    });
+  }
+  if (backdrop) {
+    backdrop.addEventListener("click", () => {
+      if (currentApprovalRequestId) {
+        fetchJson(`/api/chat/approvals/${encodeURIComponent(currentApprovalRequestId)}/cancel`, {
+          method: "POST",
+        }).catch(() => {});
+      }
+      hideApprovalModal();
+    });
+  }
+}
+
+let loadedCommands = null;
+
+async function loadCommands() {
+  if (loadedCommands) {
+    return loadedCommands;
+  }
+  try {
+    const payload = await fetchJson("/api/commands");
+    loadedCommands = payload.commands || [];
+    return loadedCommands;
+  } catch {
+    return [];
+  }
+}
+
+function showCommandSuggestions(commands, filter) {
+  const container = byId("command-suggestions");
+  if (!container) {
+    return;
+  }
+  const filtered = commands.filter((cmd) => {
+    const name = String(cmd.name || "").toLowerCase();
+    const aliases = Array.isArray(cmd.aliases) ? cmd.aliases.map((a) => String(a).toLowerCase()) : [];
+    const q = String(filter || "").toLowerCase();
+    return name.startsWith(q) || aliases.some((a) => a.startsWith(q));
+  });
+  if (!filtered.length) {
+    container.hidden = true;
+    return;
+  }
+  container.innerHTML = filtered
+    .map(
+      (cmd, idx) =>
+        `<button class="command-suggestion-item${idx === 0 ? " selected" : ""}" data-command-name="${cmd.name}" type="button">
+          <span class="command-suggestion-name">${cmd.name}</span>
+          <span class="command-suggestion-desc">${cmd.description || ""}</span>
+        </button>`,
+    )
+    .join("");
+  container.hidden = false;
+}
+
+function hideCommandSuggestions() {
+  const container = byId("command-suggestions");
+  if (container) {
+    container.hidden = true;
+  }
+}
+
+export async function wireCommandAutocomplete() {
+  const textarea = byId("goal");
+  const suggestionsContainer = byId("command-suggestions");
+  if (!textarea) {
+    return;
+  }
+  const commands = await loadCommands();
+  let selectedIndex = 0;
+
+  textarea.addEventListener("input", async () => {
+    const text = textarea.value || "";
+    const cursorPos = textarea.selectionStart || 0;
+    const beforeCursor = text.slice(0, cursorPos);
+    const slashMatch = beforeCursor.match(/\/[a-zA-Z]*$/);
+    if (slashMatch) {
+      const filter = slashMatch[0];
+      showCommandSuggestions(commands, filter);
+      selectedIndex = 0;
+    } else {
+      hideCommandSuggestions();
+    }
+  });
+
+  textarea.addEventListener("keydown", (event) => {
+    if (!suggestionsContainer || suggestionsContainer.hidden) {
+      return;
+    }
+    const items = Array.from(suggestionsContainer.querySelectorAll(".command-suggestion-item"));
+    if (!items.length) {
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
+      items.forEach((item, idx) => item.classList.toggle("selected", idx === selectedIndex));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      selectedIndex = Math.max(selectedIndex - 1, 0);
+      items.forEach((item, idx) => item.classList.toggle("selected", idx === selectedIndex));
+    } else if (event.key === "Enter" && !event.shiftKey) {
+      const selectedItem = items[selectedIndex];
+      if (selectedItem) {
+        event.preventDefault();
+        const commandName = selectedItem.dataset.commandName || "";
+        const text = textarea.value || "";
+        const cursorPos = textarea.selectionStart || 0;
+        const beforeCursor = text.slice(0, cursorPos);
+        const afterCursor = text.slice(cursorPos);
+        const slashMatch = beforeCursor.match(/\/[a-zA-Z]*$/);
+        if (slashMatch) {
+          const newText = beforeCursor.slice(0, -slashMatch[0].length) + commandName + " " + afterCursor;
+          textarea.value = newText;
+          const newCursorPos = beforeCursor.length - slashMatch[0].length + commandName.length + 1;
+          textarea.setSelectionRange(newCursorPos, newCursorPos);
+        }
+        hideCommandSuggestions();
+      }
+    } else if (event.key === "Escape") {
+      hideCommandSuggestions();
+    }
+  });
+
+  suggestionsContainer?.addEventListener("click", (event) => {
+    const item = event.target.closest(".command-suggestion-item");
+    if (!item) {
+      return;
+    }
+    const commandName = item.dataset.commandName || "";
+    const text = textarea.value || "";
+    const cursorPos = textarea.selectionStart || 0;
+    const beforeCursor = text.slice(0, cursorPos);
+    const afterCursor = text.slice(cursorPos);
+    const slashMatch = beforeCursor.match(/\/[a-zA-Z]*$/);
+    if (slashMatch) {
+      const newText = beforeCursor.slice(0, -slashMatch[0].length) + commandName + " " + afterCursor;
+      textarea.value = newText;
+      const newCursorPos = beforeCursor.length - slashMatch[0].length + commandName.length + 1;
+      textarea.setSelectionRange(newCursorPos, newCursorPos);
+    }
+    hideCommandSuggestions();
+    textarea.focus();
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!suggestionsContainer) {
+      return;
+    }
+    if (!suggestionsContainer.contains(event.target) && event.target !== textarea) {
+      hideCommandSuggestions();
+    }
+  });
 }

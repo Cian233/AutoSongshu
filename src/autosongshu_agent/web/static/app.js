@@ -10,6 +10,8 @@ import {
   saveAuthorizationRecord,
   scheduleRenderApp,
   submitMessage,
+  wireApprovalButtons,
+  wireCommandAutocomplete,
 } from "./api.js";
 import {
   byId,
@@ -270,6 +272,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     await bootstrap();
     await refreshKnowledgeBases({ loadDetail: true });
     connectRealtime();
+    wireApprovalButtons();
+    wireCommandAutocomplete();
   } catch (error) {
     const chatThread = byId("chat-thread");
     if (chatThread) {

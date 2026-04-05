@@ -221,20 +221,32 @@ function assistantPartOpenAttr(key, fallback = false) {
 
 function toolStatusLabel(toolItem, message) {
   if (toolItem.toolResult) {
+    if (toolItem.toolResult.error) {
+      return "失败";
+    }
     return "已返回";
   }
   if (message?.status === "in_progress") {
     return "运行中";
+  }
+  if (message?.status === "failed") {
+    return "已中断";
   }
   return "等待结果";
 }
 
 function toolStatusClass(toolItem, message) {
   if (toolItem.toolResult) {
+    if (toolItem.toolResult.error) {
+      return "is-error";
+    }
     return "is-success";
   }
   if (message?.status === "in_progress") {
     return "is-running";
+  }
+  if (message?.status === "failed") {
+    return "is-error";
   }
   return "is-pending";
 }
@@ -1638,9 +1650,21 @@ export function renderSessionMeta(session) {
   const runtime = getSessionRuntimeSnapshot(session);
   const connection = renderConnectionState();
   const hasAllowedHosts = Array.isArray(session.allowed_hosts) && session.allowed_hosts.length > 0;
+
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const compactedCount = messages.filter((msg) => msg.compacted).length;
+  const activeCount = messages.filter((msg) => !msg.compacted).length;
+
   const items = [
     { label: "连接", value: connection.label, tone: connection.className },
-    { label: "消息数", value: String(session.message_count ?? session.messages?.length ?? 0) },
+    { label: "消息数", value: String(activeCount) },
+    ...(compactedCount > 0
+      ? [{ label: "已压缩", value: String(compactedCount), tone: "status-compacted" }]
+      : []),
+    ...(session.token_usage ? [
+      { label: "Token", value: `${session.token_usage.total_tokens || 0}`, tone: "status-token" },
+      ...(session.token_usage.event_count ? [{ label: "API调用", value: String(session.token_usage.event_count) }] : [])
+    ] : []),
     ...(hasAllowedHosts
       ? [{ label: "授权范围", value: session.allowed_hosts.join(", ") }]
       : [{ label: "授权范围", value: "无限制", tone: "status-unrestricted" }]),
@@ -1813,18 +1837,22 @@ function renderMessageMarkup(message) {
   const text = messageText(message);
   const isPending = message.status === "in_progress";
   const isFailed = message.status === "failed";
+  const isCompacted = Boolean(message.compacted);
   const assistantTimeline = role === "assistant" ? renderAssistantTimeline(message) : "";
   const bubbleText =
     role === "assistant"
       ? text || (isPending ? "正在处理请求…" : isFailed ? "本轮回复失败。" : "本轮没有可展示的文本输出。")
       : text;
 
+  const compactedClass = isCompacted ? "message-compacted" : "";
+
   return {
-    className: `message ${escapeHtml(role)} ${isFailed ? "message-failed" : ""}`.trim(),
+    className: `message ${escapeHtml(role)} ${isFailed ? "message-failed" : ""} ${compactedClass}`.trim(),
     markup: `
       <div class="message-label-row">
         <span class="message-label">${role === "user" ? "用户" : "助手"}</span>
         <span class="message-time">${escapeHtml(formatDate(message.updated_at || message.created_at))}</span>
+        ${isCompacted ? '<span class="message-compacted-badge" title="此消息已压缩，不会发送给模型">已压缩</span>' : ""}
       </div>
       <div class="message-bubble">
         ${
@@ -2015,6 +2043,69 @@ export function renderMessages() {
   }
 }
 
+function renderCompactedMessagesSection(compactedMessages) {
+  if (!compactedMessages || compactedMessages.length === 0) {
+    return "";
+  }
+
+  const tokenCount = compactedMessages.reduce((sum, msg) => sum + (msg.token_count || 0), 0);
+  const turnCount = compactedMessages.filter((msg) => msg.role === "user").length;
+
+  return `
+    <section class="compacted-messages-section" data-compacted-section>
+      <header class="compacted-messages-header">
+        <div class="compacted-messages-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
+          </svg>
+          <span>已压缩的历史消息</span>
+        </div>
+        <button class="compacted-messages-toggle" type="button" data-compacted-toggle aria-expanded="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+          <span>收起</span>
+        </button>
+      </header>
+      <div class="compaction-stats">
+        <span>共 <strong>${compactedMessages.length}</strong> 条消息</span>
+        <span><strong>${turnCount}</strong> 轮对话</span>
+        <span>约 <strong>${tokenCount}</strong> tokens</span>
+        <span class="compaction-hint">（已压缩，不会发送给模型）</span>
+      </div>
+      <div class="compacted-messages-content" data-compacted-content>
+        ${compactedMessages.map((msg) => {
+          const view = renderMessageMarkup({ ...msg, compacted: true });
+          return `<article class="${view.className}" data-message-id="${msg.id || ""}">${view.markup}</article>`;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function wireCompactedMessagesToggle() {
+  document.querySelectorAll("[data-compacted-toggle]").forEach((toggle) => {
+    if (toggle.dataset.wired === "true") {
+      return;
+    }
+    toggle.dataset.wired = "true";
+    toggle.addEventListener("click", () => {
+      const section = toggle.closest("[data-compacted-section]");
+      const content = section?.querySelector("[data-compacted-content]");
+      const isCollapsed = content?.classList.contains("collapsed");
+      if (content) {
+        content.classList.toggle("collapsed", !isCollapsed);
+      }
+      toggle.classList.toggle("collapsed", isCollapsed);
+      toggle.setAttribute("aria-expanded", String(isCollapsed));
+      const label = toggle.querySelector("span:last-child");
+      if (label) {
+        label.textContent = isCollapsed ? "收起" : "展开";
+      }
+    });
+  });
+}
+
 function renderMessagesFast() {
   const root = byId("chat-thread");
   if (!root) {
@@ -2033,16 +2124,63 @@ function renderMessagesFast() {
     return;
   }
 
-  root.dataset.view = "messages";
   const messages = Array.isArray(session.messages) ? session.messages : [];
+
+  // Clear empty/loading stage when we have messages, or show empty stage if no messages
+  if (root.dataset.view === "empty" || root.dataset.view === "loading") {
+    if (messages.length > 0) {
+      root.innerHTML = "";
+    } else {
+      // Session loaded but empty - show empty stage
+      root.innerHTML = emptyStageMarkup();
+    }
+  }
+
+  root.dataset.view = "messages";
+
+  const compactedMessages = messages.filter((msg) => msg.compacted);
+  const activeMessages = messages.filter((msg) => !msg.compacted);
+
   const existingById = new Map(
     Array.from(root.children)
       .filter((node) => node instanceof HTMLElement && node.dataset.messageId)
       .map((node) => [node.dataset.messageId, node]),
   );
-  let anchor = root.firstElementChild;
 
-  for (const message of messages) {
+  const existingCompactedSection = Array.from(root.children).find(
+    (node) => node.hasAttribute("data-compacted-section")
+  );
+
+  if (compactedMessages.length === 0) {
+    // If we have an existing section but no compacted messages, let it be removed below
+  } else {
+    if (existingCompactedSection && existingCompactedSection.dataset.msgCount === String(compactedMessages.length)) {
+      // Re-insert at top if not already
+    } else {
+      const sectionHtml = renderCompactedMessagesSection(compactedMessages);
+      const sectionContainer = document.createElement("div");
+      sectionContainer.innerHTML = sectionHtml;
+      const section = sectionContainer.firstElementChild;
+      if (section) {
+        section.dataset.msgCount = String(compactedMessages.length);
+        if (existingCompactedSection) {
+           root.replaceChild(section, existingCompactedSection);
+        } else {
+           root.insertBefore(section, root.firstChild);
+        }
+      }
+    }
+  }
+
+  let anchor = root.querySelector("[data-compacted-section]")?.nextElementSibling || root.firstElementChild;
+  if (root.querySelector("[data-compacted-section]") === root.firstElementChild) {
+     anchor = root.firstElementChild?.nextElementSibling || null;
+  } else if (existingCompactedSection && existingCompactedSection.parentNode === root) {
+     root.insertBefore(existingCompactedSection, root.firstElementChild);
+     anchor = existingCompactedSection.nextElementSibling;
+  }
+
+  for (const message of activeMessages) {
     const messageId = String(message.id || "");
     let node = existingById.get(messageId);
     if (!node) {
@@ -2064,11 +2202,15 @@ function renderMessagesFast() {
     }
   }
 
-  while (anchor) {
+  while (anchor && !anchor.dataset?.compactedSection) {
     const next = anchor.nextElementSibling;
-    root.removeChild(anchor);
+    if (anchor.dataset.messageId) {
+      root.removeChild(anchor);
+    }
     anchor = next;
   }
+
+  wireCompactedMessagesToggle();
 
   if (scrollContainer && shouldStickToBottom) {
     stickChatToBottom(scrollContainer);

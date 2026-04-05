@@ -30,6 +30,7 @@ class BaseAgentHarness(_AgentBuilderMixin):
         config: AppConfig,
         artifact_session_name: str | None = None,
         sandbox_user_id: str | None = None,
+        permission_interceptor: Any | None = None,
     ) -> None:
         self.config = config
         self.runtime = PentestRuntime(
@@ -41,6 +42,7 @@ class BaseAgentHarness(_AgentBuilderMixin):
         self._interrupt_lock = threading.RLock()
         self._active_loop: asyncio.AbstractEventLoop | None = None
         self._interrupt_requested = False
+        self.permission_interceptor = permission_interceptor
         self.agent = self._build_agent()
 
     async def run_agent_turn(
@@ -85,6 +87,7 @@ class BaseAgentHarness(_AgentBuilderMixin):
                 self.cost_tracker.add_usage(
                     input_tokens=int(prompt_tokens),
                     output_tokens=int(completion_tokens),
+                    label="agent_turn",
                 )
 
         if use_loop_guard:

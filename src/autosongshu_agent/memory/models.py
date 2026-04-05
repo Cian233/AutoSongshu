@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -7,15 +8,71 @@ from pydantic import BaseModel, Field
 from ..utils import dedupe_strings, normalize_text, truncate_text
 
 
+class CostEvent(BaseModel):
+    label: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float = 0.0
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now().isoformat(timespec="seconds")
+    )
+
+
 class CostTracker(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_cost: float = 0.0
+    events: list[CostEvent] = Field(default_factory=list)
 
-    def add_usage(self, input_tokens: int, output_tokens: int, cost: float = 0.0) -> None:
+    def add_usage(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cost: float = 0.0,
+        label: str = "model_call",
+    ) -> None:
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
         self.total_cost += cost
+        self.events.append(
+            CostEvent(
+                label=label,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost=cost,
+            )
+        )
+
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def summary_dict(self) -> dict[str, Any]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens(),
+            "total_cost": self.total_cost,
+            "event_count": len(self.events),
+        }
+
+    def as_markdown(self) -> str:
+        lines = [
+            "# Token Usage Summary",
+            "",
+            f"- Input Tokens: {self.input_tokens}",
+            f"- Output Tokens: {self.output_tokens}",
+            f"- Total Tokens: {self.total_tokens()}",
+            f"- Total Cost: ${self.total_cost:.4f}",
+            f"- Events: {len(self.events)}",
+            "",
+            "## Event History",
+        ]
+        for event in self.events[-20:]:
+            lines.append(
+                f"- [{event.timestamp}] {event.label}: "
+                f"{event.input_tokens} in / {event.output_tokens} out"
+            )
+        return "\n".join(lines)
 
 
 class MemoryNote(BaseModel):
@@ -86,7 +143,8 @@ class SessionHandoffCard(BaseModel):
             )
         if self.recent_requests:
             sections.append(
-                "Recent requests:\n" + "\n".join(f"- {item}" for item in self.recent_requests)
+                "Recent requests:\n"
+                + "\n".join(f"- {item}" for item in self.recent_requests)
             )
         if self.discoveries:
             sections.append(
@@ -217,6 +275,7 @@ class MemorySynthesisPayload(BaseModel):
 
 
 __all__ = [
+    "CostEvent",
     "CostTracker",
     "MemoryNote",
     "SessionHandoffCard",

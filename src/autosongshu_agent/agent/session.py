@@ -32,11 +32,13 @@ class PentestConversationSession(BaseAgentHarness):
         config: AppConfig,
         artifact_session_name: str | None = None,
         sandbox_user_id: str | None = None,
+        permission_interceptor: Any | None = None,
     ) -> None:
         super().__init__(
             config,
             artifact_session_name=artifact_session_name,
             sandbox_user_id=sandbox_user_id,
+            permission_interceptor=permission_interceptor,
         )
         self._memory_context = ""
         self.memory_model = self._build_memory_model()
@@ -207,5 +209,6 @@ class PentestConversationSession(BaseAgentHarness):
         return asyncio.run(
             self.send_async(user_message, stream_callback=stream_callback)
         )
+
 
 __all__ = ["PentestConversationSession"]

@@ -161,6 +161,8 @@ class ChatMessage:
     updated_at: str = field(default_factory=now_iso)
     error: str | None = None
     order_index: int = 0
+    compacted: bool = False
+    token_count: int = 0
 
     def text_content(self) -> str:
         return message_text(self.content)
@@ -169,7 +171,7 @@ class ChatMessage:
         content = normalize_message_content(self.content, role=self.role)
         if self.role == "assistant" and self.status == "completed":
             content = finalize_completed_assistant_content(content)
-        return {
+        result = {
             "id": self.id,
             "object": "chat.message",
             "role": self.role,
@@ -180,6 +182,11 @@ class ChatMessage:
             "updated_at": self.updated_at,
             "order_index": self.order_index,
         }
+        if self.compacted:
+            result["compacted"] = True
+        if self.token_count > 0:
+            result["token_count"] = self.token_count
+        return result
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ChatMessage":
@@ -197,6 +204,8 @@ class ChatMessage:
             created_at=str(payload.get("created_at") or now_iso()),
             updated_at=str(payload.get("updated_at") or now_iso()),
             order_index=int(payload.get("order_index") or 0),
+            compacted=bool(payload.get("compacted")),
+            token_count=int(payload.get("token_count") or 0),
         )
 
 
@@ -271,6 +280,10 @@ class ChatSessionState:
                 "messages": [message.to_dict() for message in self.messages],
             },
         )
+        if self.conversation is not None and hasattr(self.conversation, "cost_tracker"):
+            tracker = self.conversation.cost_tracker
+            if hasattr(tracker, "summary_dict"):
+                payload["token_usage"] = tracker.summary_dict()
         return payload
 
     def persistence_dict(self) -> dict[str, Any]:

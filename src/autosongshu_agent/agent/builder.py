@@ -21,6 +21,7 @@ class _AgentBuilderMixin:
     config: AppConfig
     runtime: PentestRuntime
     skill_report: SkillLoadReport
+    permission_interceptor: Any = None
 
     def _build_model(self) -> OpenAIChatModel:
         api_key = self.config.model.api_key
@@ -89,7 +90,9 @@ class _AgentBuilderMixin:
         )
 
         toolkit = Toolkit()
-        register_default_tools(toolkit, self.runtime)
+        register_default_tools(
+            toolkit, self.runtime, permission_interceptor=self.permission_interceptor
+        )
         skill_report = SkillLoadReport(
             configured_directories=list(self.config.skills.directories)
         )

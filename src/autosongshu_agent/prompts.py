@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from .config import AppConfig
+from .environment import build_project_context, inject_git_status_to_prompt
 
 
-def build_system_prompt(config: AppConfig) -> str:
+def build_system_prompt(config: AppConfig, project_root: Path | None = None) -> str:
     if config.engagement.allowed_hosts:
         allowed_hosts = ", ".join(config.engagement.allowed_hosts)
         notes = config.engagement.notes or "No extra notes."
@@ -69,3 +72,4 @@ Recommended workflow:
 
 Keep the final answer concise and evidence-first. Default to Simplified Chinese.
 """.strip()
+    return inject_git_status_to_prompt(base_prompt, root=project_root)

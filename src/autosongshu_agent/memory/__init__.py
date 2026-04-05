@@ -13,6 +13,15 @@ from .utils import (
     completed_messages_after_anchor,
     sync_validated_findings,
 )
+from .context_window import (
+    TranscriptEntry,
+    TranscriptStore,
+    CompactedRange,
+    TokenBudgetTracker,
+    ContextWindowConfig,
+    ContextWindowManager,
+    CompactionResult,
+)
 
 __all__ = [
     "LayeredConversationMemory",
@@ -24,4 +33,11 @@ __all__ = [
     "completed_messages_after_anchor",
     "now_iso",
     "sync_validated_findings",
+    "TranscriptEntry",
+    "TranscriptStore",
+    "CompactedRange",
+    "TokenBudgetTracker",
+    "ContextWindowConfig",
+    "ContextWindowManager",
+    "CompactionResult",
 ]

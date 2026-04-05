@@ -113,11 +113,7 @@ class PentestCoordinator(BaseAgentHarness):
             return RunResult(
                 final_message=assistant_message,
                 artifact_dir=str(self.runtime.artifacts.session_dir),
-                usage={
-                    "input_tokens": self.cost_tracker.input_tokens,
-                    "output_tokens": self.cost_tracker.output_tokens,
-                    "total_tokens": self.cost_tracker.input_tokens + self.cost_tracker.output_tokens,
-                },
+                usage=self.cost_tracker.summary_dict(),
             )
         finally:
             if stop_event is not None:

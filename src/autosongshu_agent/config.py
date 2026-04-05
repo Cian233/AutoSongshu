@@ -12,7 +12,9 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
 
 
-_ENV_ONLY_PATTERN = re.compile(r"^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)$")
+_ENV_ONLY_PATTERN = re.compile(
+    r"^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)$"
+)
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _ENV_OVERRIDES: dict[tuple[str, ...], tuple[str, ...]] = {
@@ -26,7 +28,9 @@ _ENV_OVERRIDES: dict[tuple[str, ...], tuple[str, ...]] = {
     ("model", "timeout"): ("AUTOSONGSHU_MODEL_TIMEOUT",),
     ("browser", "mode"): ("AUTOSONGSHU_BROWSER_MODE",),
     ("browser", "cdp_url"): ("AUTOSONGSHU_BROWSER_CDP_URL",),
-    ("browser", "fallback_to_launch_on_cdp_error"): ("AUTOSONGSHU_BROWSER_FALLBACK_TO_LAUNCH_ON_CDP_ERROR",),
+    ("browser", "fallback_to_launch_on_cdp_error"): (
+        "AUTOSONGSHU_BROWSER_FALLBACK_TO_LAUNCH_ON_CDP_ERROR",
+    ),
     ("browser", "channel"): ("AUTOSONGSHU_BROWSER_CHANNEL",),
     ("browser", "executable_path"): ("AUTOSONGSHU_BROWSER_EXECUTABLE_PATH",),
     ("browser", "headless"): ("AUTOSONGSHU_BROWSER_HEADLESS",),
@@ -35,9 +39,18 @@ _ENV_OVERRIDES: dict[tuple[str, ...], tuple[str, ...]] = {
     ("browser", "viewport_width"): ("AUTOSONGSHU_BROWSER_VIEWPORT_WIDTH",),
     ("browser", "viewport_height"): ("AUTOSONGSHU_BROWSER_VIEWPORT_HEIGHT",),
     ("engagement", "name"): ("AUTOSONGSHU_ENGAGEMENT_NAME",),
-    ("engagement", "authorization"): ("AUTOSONGSHU_ENGAGEMENT_AUTHORIZATION", "AUTOSONGSHU_AUTHORIZATION"),
-    ("engagement", "start_url"): ("AUTOSONGSHU_ENGAGEMENT_START_URL", "AUTOSONGSHU_SCOPE_START_URL"),
-    ("engagement", "allowed_hosts"): ("AUTOSONGSHU_ENGAGEMENT_ALLOWED_HOSTS", "AUTOSONGSHU_SCOPE_ALLOWED_HOSTS"),
+    ("engagement", "authorization"): (
+        "AUTOSONGSHU_ENGAGEMENT_AUTHORIZATION",
+        "AUTOSONGSHU_AUTHORIZATION",
+    ),
+    ("engagement", "start_url"): (
+        "AUTOSONGSHU_ENGAGEMENT_START_URL",
+        "AUTOSONGSHU_SCOPE_START_URL",
+    ),
+    ("engagement", "allowed_hosts"): (
+        "AUTOSONGSHU_ENGAGEMENT_ALLOWED_HOSTS",
+        "AUTOSONGSHU_SCOPE_ALLOWED_HOSTS",
+    ),
     ("engagement", "allow_subdomains"): (
         "AUTOSONGSHU_ENGAGEMENT_ALLOW_SUBDOMAINS",
         "AUTOSONGSHU_SCOPE_ALLOW_SUBDOMAINS",
@@ -56,17 +69,30 @@ _ENV_OVERRIDES: dict[tuple[str, ...], tuple[str, ...]] = {
     ("sandbox", "root_subdir"): ("AUTOSONGSHU_SANDBOX_ROOT_SUBDIR",),
     ("sandbox", "workspace_subdir"): ("AUTOSONGSHU_SANDBOX_WORKSPACE_SUBDIR",),
     ("sandbox", "venv_subdir"): ("AUTOSONGSHU_SANDBOX_VENV_SUBDIR",),
-    ("sandbox", "allow_package_install"): ("AUTOSONGSHU_SANDBOX_ALLOW_PACKAGE_INSTALL",),
-    ("sandbox", "bootstrap_timeout_sec"): ("AUTOSONGSHU_SANDBOX_BOOTSTRAP_TIMEOUT_SEC",),
+    ("sandbox", "allow_package_install"): (
+        "AUTOSONGSHU_SANDBOX_ALLOW_PACKAGE_INSTALL",
+    ),
+    ("sandbox", "bootstrap_timeout_sec"): (
+        "AUTOSONGSHU_SANDBOX_BOOTSTRAP_TIMEOUT_SEC",
+    ),
     ("sandbox", "install_timeout_sec"): ("AUTOSONGSHU_SANDBOX_INSTALL_TIMEOUT_SEC",),
-    ("sandbox", "execution_timeout_sec"): ("AUTOSONGSHU_SANDBOX_EXECUTION_TIMEOUT_SEC",),
-    ("sandbox", "index_url"): ("AUTOSONGSHU_SANDBOX_INDEX_URL", "UV_INDEX_URL", "PIP_INDEX_URL"),
+    ("sandbox", "execution_timeout_sec"): (
+        "AUTOSONGSHU_SANDBOX_EXECUTION_TIMEOUT_SEC",
+    ),
+    ("sandbox", "index_url"): (
+        "AUTOSONGSHU_SANDBOX_INDEX_URL",
+        "UV_INDEX_URL",
+        "PIP_INDEX_URL",
+    ),
     ("sandbox", "extra_index_urls"): (
         "AUTOSONGSHU_SANDBOX_EXTRA_INDEX_URLS",
         "UV_EXTRA_INDEX_URL",
         "PIP_EXTRA_INDEX_URL",
     ),
-    ("sandbox", "trusted_hosts"): ("AUTOSONGSHU_SANDBOX_TRUSTED_HOSTS", "PIP_TRUSTED_HOST"),
+    ("sandbox", "trusted_hosts"): (
+        "AUTOSONGSHU_SANDBOX_TRUSTED_HOSTS",
+        "PIP_TRUSTED_HOST",
+    ),
     ("sandbox", "bootstrap_packages"): ("AUTOSONGSHU_SANDBOX_BOOTSTRAP_PACKAGES",),
     ("agent", "max_iters"): ("AUTOSONGSHU_AGENT_MAX_ITERS",),
     ("agent", "max_subtasks"): ("AUTOSONGSHU_AGENT_MAX_SUBTASKS",),
@@ -78,7 +104,24 @@ _ENV_OVERRIDES: dict[tuple[str, ...], tuple[str, ...]] = {
     ("compaction", "trigger_chars"): ("AUTOSONGSHU_COMPACTION_TRIGGER_CHARS",),
     ("compaction", "reserved_chars"): ("AUTOSONGSHU_COMPACTION_RESERVED_CHARS",),
     ("compaction", "min_turns"): ("AUTOSONGSHU_COMPACTION_MIN_TURNS",),
-    ("compaction", "retain_recent_turns"): ("AUTOSONGSHU_COMPACTION_RETAIN_RECENT_TURNS",),
+    ("compaction", "retain_recent_turns"): (
+        "AUTOSONGSHU_COMPACTION_RETAIN_RECENT_TURNS",
+    ),
+    ("compaction", "context_window_tokens"): (
+        "AUTOSONGSHU_COMPACTION_CONTEXT_WINDOW_TOKENS",
+    ),
+    ("compaction", "reserved_tokens"): ("AUTOSONGSHU_COMPACTION_RESERVED_TOKENS",),
+    ("compaction", "compact_after_tokens"): (
+        "AUTOSONGSHU_COMPACTION_COMPACT_AFTER_TOKENS",
+    ),
+    ("compaction", "compact_after_turns"): (
+        "AUTOSONGSHU_COMPACTION_COMPACT_AFTER_TURNS",
+    ),
+    ("compaction", "keep_first_turns"): ("AUTOSONGSHU_COMPACTION_KEEP_FIRST_TURNS",),
+    ("compaction", "keep_last_turns"): ("AUTOSONGSHU_COMPACTION_KEEP_LAST_TURNS",),
+    ("compaction", "use_token_counting"): (
+        "AUTOSONGSHU_COMPACTION_USE_TOKEN_COUNTING",
+    ),
 }
 _BOOL_ENV_FIELDS: set[tuple[str, ...]] = {
     ("model", "stream"),
@@ -96,6 +139,7 @@ _BOOL_ENV_FIELDS: set[tuple[str, ...]] = {
     ("agent", "loop_guard_enabled"),
     ("compaction", "auto"),
     ("compaction", "prune"),
+    ("compaction", "use_token_counting"),
 }
 _INT_ENV_FIELDS: set[tuple[str, ...]] = {
     ("model", "max_tokens"),
@@ -112,6 +156,12 @@ _INT_ENV_FIELDS: set[tuple[str, ...]] = {
     ("compaction", "reserved_chars"),
     ("compaction", "min_turns"),
     ("compaction", "retain_recent_turns"),
+    ("compaction", "context_window_tokens"),
+    ("compaction", "reserved_tokens"),
+    ("compaction", "compact_after_tokens"),
+    ("compaction", "compact_after_turns"),
+    ("compaction", "keep_first_turns"),
+    ("compaction", "keep_last_turns"),
 }
 _FLOAT_ENV_FIELDS: set[tuple[str, ...]] = {
     ("model", "temperature"),
@@ -241,10 +291,12 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
 
 class ModelConfig(BaseModel):
     model_name: str = Field(
-        default_factory=lambda: _get_first_env(
-            "AUTOSONGSHU_MODEL_NAME",
-        )
-        or "gpt-4.1-mini",
+        default_factory=lambda: (
+            _get_first_env(
+                "AUTOSONGSHU_MODEL_NAME",
+            )
+            or "gpt-4.1-mini"
+        ),
     )
     api_key: str | None = Field(
         default_factory=lambda: _get_first_env(
@@ -257,21 +309,31 @@ class ModelConfig(BaseModel):
         ),
     )
     temperature: float = Field(
-        default_factory=lambda: float(_get_first_env("AUTOSONGSHU_MODEL_TEMPERATURE") or 1.0),
+        default_factory=lambda: float(
+            _get_first_env("AUTOSONGSHU_MODEL_TEMPERATURE") or 1.0
+        ),
     )
     top_p: float = Field(
-        default_factory=lambda: float(_get_first_env("AUTOSONGSHU_MODEL_TOP_P") or 0.95),
+        default_factory=lambda: float(
+            _get_first_env("AUTOSONGSHU_MODEL_TOP_P") or 0.95
+        ),
     )
     stream: bool = Field(
-        default_factory=lambda: _parse_bool(_get_first_env("AUTOSONGSHU_MODEL_STREAM") or "true"),
+        default_factory=lambda: _parse_bool(
+            _get_first_env("AUTOSONGSHU_MODEL_STREAM") or "true"
+        ),
     )
     max_tokens: int | None = Field(
         default_factory=lambda: (
-            int(value) if (value := _get_first_env("AUTOSONGSHU_MODEL_MAX_TOKENS")) else None
+            int(value)
+            if (value := _get_first_env("AUTOSONGSHU_MODEL_MAX_TOKENS"))
+            else None
         ),
     )
     timeout: float = Field(
-        default_factory=lambda: float(_get_first_env("AUTOSONGSHU_MODEL_TIMEOUT") or 120.0),
+        default_factory=lambda: float(
+            _get_first_env("AUTOSONGSHU_MODEL_TIMEOUT") or 120.0
+        ),
     )
 
 
@@ -290,7 +352,9 @@ class BrowserConfig(BaseModel):
     @model_validator(mode="after")
     def validate_browser_mode(self) -> "BrowserConfig":
         if self.mode == "connect_over_cdp" and not self.cdp_url:
-            raise ValueError("browser.cdp_url is required when browser.mode=connect_over_cdp")
+            raise ValueError(
+                "browser.cdp_url is required when browser.mode=connect_over_cdp"
+            )
         return self
 
 
@@ -360,8 +424,10 @@ class SandboxConfig(BaseModel):
         ),
     )
     bootstrap_packages: list[str] = Field(
-        default_factory=lambda: _parse_env_list(_get_first_env("AUTOSONGSHU_SANDBOX_BOOTSTRAP_PACKAGES"))
-        or ["requests", "httpx", "beautifulsoup4", "lxml", "pyyaml"],
+        default_factory=lambda: (
+            _parse_env_list(_get_first_env("AUTOSONGSHU_SANDBOX_BOOTSTRAP_PACKAGES"))
+            or ["requests", "httpx", "beautifulsoup4", "lxml", "pyyaml"]
+        ),
     )
 
     @model_validator(mode="after")
@@ -374,7 +440,9 @@ class SandboxConfig(BaseModel):
                 raise ValueError(f"sandbox.{field_name} must not be empty")
             if Path(raw_value).is_absolute():
                 raise ValueError(f"sandbox.{field_name} must be a relative path")
-        self.bootstrap_packages = [item.strip() for item in self.bootstrap_packages if item.strip()]
+        self.bootstrap_packages = [
+            item.strip() for item in self.bootstrap_packages if item.strip()
+        ]
         return self
 
 
@@ -394,6 +462,13 @@ class CompactionConfig(BaseModel):
     reserved_chars: int = 4000
     min_turns: int = 4
     retain_recent_turns: int = 2
+    context_window_tokens: int = 128000
+    reserved_tokens: int = 8000
+    compact_after_tokens: int = 90000
+    compact_after_turns: int = 12
+    keep_first_turns: int = 1
+    keep_last_turns: int = 4
+    use_token_counting: bool = True
 
 
 class AppConfig(BaseModel):
@@ -409,12 +484,16 @@ class AppConfig(BaseModel):
 
     def resolve_paths(self, base_dir: Path) -> "AppConfig":
         self.artifacts.root_dir = _resolve_path(base_dir, self.artifacts.root_dir)
-        self.sandbox.shared_root_dir = _resolve_path(base_dir, self.sandbox.shared_root_dir)
+        self.sandbox.shared_root_dir = _resolve_path(
+            base_dir, self.sandbox.shared_root_dir
+        )
         self.skills.directories = [
             _resolve_path(base_dir, item) for item in self.skills.directories
         ]
         if self.browser.executable_path:
-            self.browser.executable_path = _resolve_path(base_dir, self.browser.executable_path)
+            self.browser.executable_path = _resolve_path(
+                base_dir, self.browser.executable_path
+            )
         return self
 
 

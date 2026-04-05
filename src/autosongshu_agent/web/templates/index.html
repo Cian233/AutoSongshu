@@ -111,18 +111,64 @@
         </section>
 
         <section class="composer-shell">
+          <div class="composer-approval-panel" id="approval-modal" hidden>
+            <div class="composer-approval-head">
+              <div class="approval-risk-badge" id="approval-risk-badge">高风险</div>
+              <h3 id="approval-title">工具执行审批</h3>
+            </div>
+            
+            <div class="composer-approval-body">
+              <div class="approval-tool-info">
+                <div class="approval-tool-name-row">
+                  <span class="approval-tool-label">工具</span>
+                  <code class="approval-tool-name" id="approval-tool-name">-</code>
+                </div>
+                <div class="approval-arguments-section">
+                  <pre class="approval-arguments" id="approval-arguments">-</pre>
+                </div>
+              </div>
+
+              <div class="composer-approval-foot">
+                <label class="checkbox-field approval-remember">
+                  <input id="approval-remember-session" name="remember_session" type="checkbox" />
+                  <span>本次会话始终允许</span>
+                </label>
+                
+                <div class="approval-actions">
+                  <div class="approval-timeout-hint" id="approval-timeout-hint">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <polyline points="12,6 12,12 16,14"></polyline>
+                    </svg>
+                    <span id="approval-timeout-seconds">300</span>s
+                  </div>
+                  <button class="ghost-button small approval-deny" id="approval-deny-button" type="button">拒绝</button>
+                  <button class="primary-button small approval-approve" id="approval-approve-button" type="button">批准</button>
+                </div>
+              </div>
+            </div>
+            
+            <div class="approval-meta sr-only" id="approval-meta">
+              <span id="approval-request-id">-</span>
+              <span id="approval-session-id">-</span>
+            </div>
+          </div>
+
           <form class="composer-form" id="run-form">
-            <label class="composer-input-wrap">
-              <span class="sr-only">输入消息</span>
-              <textarea
-                id="goal"
-                name="goal"
-                rows="3"
-                placeholder="{{ default_goal }}"
-                autocomplete="off"
-                required
-              ></textarea>
-            </label>
+            <div class="composer-input-container">
+              <label class="composer-input-wrap">
+                <span class="sr-only">输入消息</span>
+                <textarea
+                  id="goal"
+                  name="goal"
+                  rows="3"
+                  placeholder="{{ default_goal }}"
+                  autocomplete="off"
+                  required
+                ></textarea>
+              </label>
+              <div class="command-suggestions" id="command-suggestions" hidden></div>
+            </div>
 
             <div class="composer-toolbar">
               <p class="composer-hint" id="composer-hint" hidden aria-live="polite"></p>
@@ -174,6 +220,8 @@
         </header>
       </aside>
     </div>
+
+
 
     <div class="settings-modal" id="settings-modal" hidden>
       <div class="settings-backdrop" id="settings-backdrop"></div>
