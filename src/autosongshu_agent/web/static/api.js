@@ -60,9 +60,10 @@ function showApprovalModal(request) {
       riskBadge.classList.add("is-critical");
     }
   }
-  const rememberCheckbox = byId("approval-remember-session");
-  if (rememberCheckbox) {
-    rememberCheckbox.checked = false;
+  // Reset scope selection to default
+  const onceRadio = modal.querySelector('input[name="approval-scope"][value="once"]');
+  if (onceRadio) {
+    onceRadio.checked = true;
   }
   modal.hidden = false;
   document.body.classList.add("modal-open");
@@ -81,13 +82,26 @@ async function respondToApproval(approved) {
   if (!currentApprovalRequestId) {
     return;
   }
-  const rememberCheckbox = byId("approval-remember-session");
-  const remember_for_session = rememberCheckbox ? rememberCheckbox.checked : false;
+  const modal = byId("approval-modal");
+  let scope = "once";
+  if (modal) {
+    const selectedScope = modal.querySelector('input[name="approval-scope"]:checked');
+    if (selectedScope) {
+      scope = selectedScope.value;
+    }
+  }
   try {
     await fetchJson(`/api/chat/approvals/${encodeURIComponent(currentApprovalRequestId)}/respond`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approved, reason: "", remember_for_session }),
+      body: JSON.stringify({ 
+        approved, 
+        reason: "", 
+        scope,
+        remember_for_session: scope === "session",
+        persist_to_user: scope === "user",
+        persist_to_project: scope === "project",
+      }),
     });
   } catch (error) {
     window.alert(`审批响应失败：${String(error.message || error)}`);
@@ -734,7 +748,8 @@ export async function wireCommandAutocomplete() {
     const text = textarea.value || "";
     const cursorPos = textarea.selectionStart || 0;
     const beforeCursor = text.slice(0, cursorPos);
-    const slashMatch = beforeCursor.match(/\/[a-zA-Z]*$/);
+    // Only show suggestions when / is at the start of the input
+    const slashMatch = beforeCursor.match(/^\/[a-zA-Z]*$/);
     if (slashMatch) {
       const filter = slashMatch[0];
       showCommandSuggestions(commands, filter);
@@ -769,7 +784,7 @@ export async function wireCommandAutocomplete() {
         const cursorPos = textarea.selectionStart || 0;
         const beforeCursor = text.slice(0, cursorPos);
         const afterCursor = text.slice(cursorPos);
-        const slashMatch = beforeCursor.match(/\/[a-zA-Z]*$/);
+        const slashMatch = beforeCursor.match(/^\/[a-zA-Z]*$/);
         if (slashMatch) {
           const newText = beforeCursor.slice(0, -slashMatch[0].length) + commandName + " " + afterCursor;
           textarea.value = newText;
@@ -793,7 +808,7 @@ export async function wireCommandAutocomplete() {
     const cursorPos = textarea.selectionStart || 0;
     const beforeCursor = text.slice(0, cursorPos);
     const afterCursor = text.slice(cursorPos);
-    const slashMatch = beforeCursor.match(/\/[a-zA-Z]*$/);
+    const slashMatch = beforeCursor.match(/^\/[a-zA-Z]*$/);
     if (slashMatch) {
       const newText = beforeCursor.slice(0, -slashMatch[0].length) + commandName + " " + afterCursor;
       textarea.value = newText;

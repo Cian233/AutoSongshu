@@ -1655,6 +1655,7 @@ export function renderSessionMeta(session) {
   const compactedCount = messages.filter((msg) => msg.compacted).length;
   const activeCount = messages.filter((msg) => !msg.compacted).length;
 
+  // Build meta items
   const items = [
     { label: "连接", value: connection.label, tone: connection.className },
     { label: "消息数", value: String(activeCount) },
@@ -1664,6 +1665,14 @@ export function renderSessionMeta(session) {
     ...(session.token_usage ? [
       { label: "Token", value: `${session.token_usage.total_tokens || 0}`, tone: "status-token" },
       ...(session.token_usage.event_count ? [{ label: "API调用", value: String(session.token_usage.event_count) }] : [])
+    ] : []),
+    // Budget warning
+    ...(session.budget_warning ? [
+      { label: "预算", value: session.budget_warning, tone: "status-warning" }
+    ] : []),
+    // Stop reason
+    ...(session.stop_reason ? [
+      { label: "停止原因", value: session.stop_reason, tone: session.stop_reason === "COMPLETED" ? "status-success" : "status-warning" }
     ] : []),
     ...(hasAllowedHosts
       ? [{ label: "授权范围", value: session.allowed_hosts.join(", ") }]
@@ -2222,10 +2231,30 @@ export function renderComposer() {
   const hint = byId("composer-hint");
   const submitButton = byId("submit-button");
   const submitButtonLabel = byId("submit-button-label");
+  const budgetBanner = byId("budget-warning-banner");
+  const budgetText = byId("budget-warning-text");
   const session = selectedSession();
+  
   if (!textarea || !submitButton) {
     return;
   }
+  
+  // Render budget warning banner
+  if (budgetBanner && budgetText) {
+    if (session?.budget_warning) {
+      budgetBanner.hidden = false;
+      budgetText.textContent = session.budget_warning;
+      // Add error class if budget exceeded
+      if (session.budget_warning.includes("超出") || session.budget_warning.includes("exceeded")) {
+        budgetBanner.classList.add("error");
+      } else {
+        budgetBanner.classList.remove("error");
+      }
+    } else {
+      budgetBanner.hidden = true;
+    }
+  }
+  
   const busy = state.isSubmitting || isSessionBusyStatus(session?.status);
   const compacting = isSessionCompacting(session);
   const runtime = session ? getSessionRuntimeSnapshot(session) : null;

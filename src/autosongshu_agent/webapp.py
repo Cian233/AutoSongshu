@@ -28,7 +28,7 @@ from .knowledge_store import (
     KnowledgeBaseUpdateDraft,
     KnowledgeDocumentDraft,
 )
-from .interactive import InteractiveApprovalManager
+from .interactive import InteractiveApprovalManager, ApprovalScope
 from .permissions import (
     InteractivePermissionInterceptor,
     build_default_permission_context,
@@ -47,6 +47,9 @@ class ApprovalResponsePayload(BaseModel):
     approved: bool
     reason: str = ""
     remember_for_session: bool = False
+    scope: ApprovalScope = "once"
+    persist_to_user: bool = False
+    persist_to_project: bool = False
 
 
 _approval_manager: InteractiveApprovalManager | None = None
@@ -634,13 +637,21 @@ def create_app() -> FastAPI:
             approved=payload.approved,
             reason=payload.reason,
             remember_for_session=payload.remember_for_session,
+            scope=payload.scope,
+            persist_to_user=payload.persist_to_user,
+            persist_to_project=payload.persist_to_project,
         )
         if not success:
             raise HTTPException(
                 status_code=404,
                 detail=f"Approval request not found: {request_id}",
             )
-        return {"success": True, "request_id": request_id, "approved": payload.approved}
+        return {
+            "success": True,
+            "request_id": request_id,
+            "approved": payload.approved,
+            "scope": payload.scope,
+        }
 
     @app.post("/api/chat/approvals/{request_id}/cancel")
     async def cancel_approval(request_id: str) -> dict[str, Any]:
