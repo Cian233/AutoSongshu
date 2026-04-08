@@ -884,7 +884,7 @@ class ChatSessionManager:
         session_id: str,
         session_title: str,
         transcript: str,
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, dict[str, int]]:
         config = load_config(config_path)
         model_name = str(config.model.model_name or "").strip()
         if not model_name:
@@ -993,6 +993,7 @@ class ChatSessionManager:
             ) from exc
 
         raw_text = ""
+        token_usage: dict[str, int] = {}
         choices = (
             response_payload.get("choices")
             if isinstance(response_payload, dict)
@@ -1006,6 +1007,19 @@ class ChatSessionManager:
             raw_text = assistant_response_text(
                 message.get("content") if isinstance(message, dict) else ""
             )
+
+        if isinstance(response_payload, dict):
+            usage = response_payload.get("usage")
+            if isinstance(usage, dict):
+                token_usage = {
+                    "input_tokens": int(
+                        usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+                    ),
+                    "output_tokens": int(
+                        usage.get("completion_tokens") or usage.get("output_tokens") or 0
+                    ),
+                }
+
         raw_text = str(raw_text or "").strip()
         if not raw_text:
             raise RuntimeError("Knowledge summary model returned empty content.")
@@ -1017,9 +1031,9 @@ class ChatSessionManager:
                 parsed.get("content") or parsed.get("content_markdown") or ""
             ).strip()
             if content:
-                return title, content, model_name
+                return title, content, model_name, token_usage
 
-        return "", raw_text, model_name
+        return "", raw_text, model_name, token_usage
 
     def _generate_knowledge_summary_from_session(
         self,
@@ -1028,9 +1042,9 @@ class ChatSessionManager:
         session_id: str,
         session_title: str,
         messages: list[ChatMessage],
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         transcript = self._build_session_knowledge_transcript(messages)
-        generated_title, generated_content, model_name = (
+        generated_title, generated_content, model_name, token_usage = (
             self._summarize_session_experience_with_model(
                 config_path=config_path,
                 session_id=session_id,
@@ -1052,6 +1066,7 @@ class ChatSessionManager:
             "title": title,
             "content": content,
             "model_name": model_name,
+            "token_usage": token_usage,
         }
 
     def create_knowledge_document_from_session(
@@ -1080,6 +1095,24 @@ class ChatSessionManager:
             session_title=session_title,
             messages=messages,
         )
+
+        with self.lock:
+            live_session = self.chat_sessions.get(session_id)
+            if (
+                live_session is not None
+                and live_session.conversation is not None
+                and hasattr(live_session.conversation, "cost_tracker")
+            ):
+                tracker = live_session.conversation.cost_tracker
+                token_usage = summary.get("token_usage", {})
+                if token_usage and hasattr(tracker, "add_usage"):
+                    tracker.add_usage(
+                        input_tokens=token_usage.get("input_tokens", 0),
+                        output_tokens=token_usage.get("output_tokens", 0),
+                        cost=0.0,
+                        label="knowledge_summary",
+                    )
+
         document = self.knowledge_store.create_document(
             target_knowledge_base_id,
             KnowledgeDocumentDraft(
