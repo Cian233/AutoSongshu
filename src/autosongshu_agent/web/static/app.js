@@ -3,10 +3,12 @@ import {
   bootstrap,
   connectRealtime,
   createKnowledgeDocumentFromSession,
+  exportSession,
   interruptSession,
   loadSession,
   refreshData,
   refreshKnowledgeBases,
+  reloadConfig,
   saveAuthorizationRecord,
   scheduleRenderApp,
   submitMessage,
@@ -16,9 +18,13 @@ import {
 import {
   byId,
   escapeHtml,
+  fetchJson,
   freezeMessageRendering,
+  selectedSession,
   setAssistantPartExpanded,
   state,
+  togglePanel,
+  truncate,
   unfreezeMessageRendering,
 } from "./state.js";
 import {
@@ -26,31 +32,90 @@ import {
   getDefaultAuthorizationDraft,
   hydrateAssistantPart,
   collectSelectedKnowledgeBaseIds,
+  closeSearchPanel,
+  isSearchPanelOpen,
+  openSearchPanel,
   renderApp,
   setAuthorizationFeedback,
   setSelectedKnowledgeBaseIds,
   toggleSettings,
+  wireSearchPanel,
 } from "./render.js";
 
 function on(id, eventName, handler) {
   byId(id)?.addEventListener(eventName, handler);
 }
 
-function focusById(id) {
-  byId(id)?.focus();
+// ── Theme Management ──────────────────────────────────────────────
+const THEME_STORAGE_KEY = "autosongshu-theme";
+const THEME_CYCLE = ["system", "light", "dark"];
+
+function getSystemPrefersDark() {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
 }
 
-function selectedSessionDetail() {
-  if (!state.selectedSessionId) {
-    return null;
-  }
-  const sessionId = String(state.selectedSessionId);
-  return (
-    state.sessionDetails.get(sessionId) ||
-    state.sessions.find((item) => String(item.id) === sessionId) ||
-    null
-  );
+function resolveTheme(themeValue) {
+  if (themeValue === "dark") return "dark";
+  if (themeValue === "light") return "light";
+  return getSystemPrefersDark() ? "dark" : "light";
 }
+
+function applyTheme(themeValue) {
+  const resolved = resolveTheme(themeValue);
+  const html = document.documentElement;
+  if (resolved === "dark") {
+    html.setAttribute("data-theme", "dark");
+  } else {
+    html.removeAttribute("data-theme");
+  }
+  // Update toggle button icon
+  const btn = byId("theme-toggle-button");
+  if (btn) {
+    if (themeValue === "system") {
+      btn.textContent = getSystemPrefersDark() ? "\uD83C\uDF19" : "\u2600\uFE0F";
+      btn.setAttribute("aria-label", "主题：跟随系统");
+    } else if (themeValue === "dark") {
+      btn.textContent = "\uD83C\uDF19";
+      btn.setAttribute("aria-label", "主题：深色");
+    } else {
+      btn.textContent = "\u2600\uFE0F";
+      btn.setAttribute("aria-label", "主题：浅色");
+    }
+  }
+}
+
+function loadSavedTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === "light" || saved === "dark" || saved === "system") {
+      return saved;
+    }
+  } catch (_) {}
+  return "system";
+}
+
+export function toggleTheme() {
+  const currentIndex = THEME_CYCLE.indexOf(state.theme);
+  const nextIndex = (currentIndex + 1) % THEME_CYCLE.length;
+  state.theme = THEME_CYCLE[nextIndex];
+  applyTheme(state.theme);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, state.theme);
+  } catch (_) {}
+}
+
+// Apply theme immediately to avoid flash
+state.theme = loadSavedTheme();
+applyTheme(state.theme);
+
+// Listen for system theme changes
+try {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (state.theme === "system") {
+      applyTheme("system");
+    }
+  });
+} catch (_) {}
 
 function chooseKnowledgeBaseId(defaultId = "") {
   if (!state.knowledgeBases.length) {
@@ -172,7 +237,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   on("new-chat-button", "click", () => {
     state.selectedSessionId = null;
     scheduleRenderApp({ force: true });
-    focusById("goal");
+    byId("goal")?.focus();
   });
   on("refresh-button", "click", () => {
     refreshData().catch((error) => window.alert(String(error.message || error)));
@@ -196,7 +261,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    const session = selectedSessionDetail();
+    const session = selectedSession();
     const linkedIds = Array.isArray(session?.knowledge_base_ids)
       ? session.knowledge_base_ids.map((item) => String(item || "").trim()).filter(Boolean)
       : [];
@@ -228,10 +293,24 @@ document.addEventListener("DOMContentLoaded", async () => {
       scheduleRenderApp({ force: true });
     }
   });
+  on("export-session-button", "click", () => {
+    if (!state.selectedSessionId) {
+      return;
+    }
+    exportSession(state.selectedSessionId, "markdown");
+  });
   on("settings-button", "click", () => toggleSettings(true));
   on("close-settings", "click", () => toggleSettings(false));
   on("save-settings", "click", () => toggleSettings(false));
   on("settings-backdrop", "click", () => toggleSettings(false));
+  on("theme-toggle-button", "click", toggleTheme);
+  on("reload-config-button", "click", async () => {
+    const configPath = byId("config-path")?.value || "";
+    const result = await reloadConfig(configPath || undefined);
+    if (result) {
+      window.alert("配置已重新加载成功");
+    }
+  });
 
   on("save-authorization", "click", saveAuthorizationRecord);
   on("authorization-profile", "change", (event) => {
@@ -263,9 +342,53 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.settingsOpen) {
-      toggleSettings(false);
+    if (event.key === "Escape") {
+      if (isSearchPanelOpen()) {
+        closeSearchPanel();
+        return;
+      }
+      if (state.settingsOpen) {
+        toggleSettings(false);
+      }
     }
+  });
+
+  // ── Keyboard Shortcuts ────────────────────────────────────────
+  document.addEventListener("keydown", (e) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod) return;
+
+    switch (e.key.toLowerCase()) {
+      case "n":
+        e.preventDefault();
+        document.getElementById("new-chat-button")?.click();
+        break;
+      case ",":
+        e.preventDefault();
+        document.getElementById("settings-button")?.click();
+        break;
+      case "f":
+        e.preventDefault();
+        // Open the search panel for message search
+        openSearchPanel();
+        break;
+      case "d":
+        if (e.shiftKey) {
+          e.preventDefault();
+          toggleTheme();
+        }
+        break;
+    }
+  });
+
+  // ── Sidebar Panel Toggle Sync ────────────────────────────────
+  document.querySelectorAll(".sidebar-panel").forEach((panel) => {
+    panel.addEventListener("toggle", () => {
+      const panelKey = panel.dataset.panelKey;
+      if (panelKey) {
+        togglePanel(panelKey);
+      }
+    });
   });
 
   try {
@@ -274,6 +397,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     connectRealtime();
     wireApprovalButtons();
     wireCommandAutocomplete();
+    wireSearchPanel();
   } catch (error) {
     const chatThread = byId("chat-thread");
     if (chatThread) {
@@ -283,7 +407,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             <span class="message-label">助手</span>
           </div>
           <div class="message-bubble">
-            <div class="markdown-body">${String(error.message || error)}</div>
+            <div class="markdown-body">${escapeHtml(String(error.message || error))}</div>
           </div>
         </article>
       `;

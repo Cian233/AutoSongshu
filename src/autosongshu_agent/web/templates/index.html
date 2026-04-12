@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AutoSongshu 对话工作台</title>
+    <title>AutoSongshu — AI 安全评估工作台</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="{{ request.url_for('static', path='styles.css') }}?v={{ asset_version }}" />
@@ -39,6 +39,7 @@
                 </svg>
                 <span class="sr-only">默认设置</span>
               </button>
+              <button class="theme-toggle-button" id="theme-toggle-button" type="button" aria-label="切换主题" title="切换主题 (Ctrl+Shift+D)">&#127769;</button>
             </div>
           </div>
 
@@ -107,6 +108,30 @@
 
       <main class="chat-app">
         <section class="chat-thread-shell">
+          <!-- Search Panel -->
+          <div class="search-panel" id="search-panel" hidden>
+            <div class="search-panel-inner">
+              <div class="search-input-wrap">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="search-input" class="search-input" placeholder="搜索消息..." autocomplete="off" spellcheck="false" />
+              </div>
+              <span class="search-count" id="search-count"></span>
+              <div class="search-nav-buttons">
+                <button type="button" class="search-nav-btn" id="search-prev" title="上一个 (Shift+Enter)" disabled>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                </button>
+                <button type="button" class="search-nav-btn" id="search-next" title="下一个 (Enter)" disabled>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+              </div>
+              <button type="button" class="search-close-btn" id="search-close" title="关闭 (Esc)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </div>
+          </div>
           <div class="chat-thread" id="chat-thread" aria-live="polite"></div>
         </section>
 
@@ -132,6 +157,10 @@
                 <label class="checkbox-field approval-remember">
                   <input id="approval-remember-session" name="remember_session" type="checkbox" />
                   <span>本次会话始终允许</span>
+                </label>
+                <label class="checkbox-field approval-remember">
+                  <input id="approval-always-allow" name="always_allow" type="checkbox" />
+                  <span>永久始终允许</span>
                 </label>
                 
                 <div class="approval-actions">
@@ -171,7 +200,6 @@
             </div>
 
             <div class="composer-toolbar">
-              <p class="composer-hint" id="composer-hint" hidden aria-live="polite"></p>
               <button
                 class="composer-attach-button"
                 id="attachment-button"
@@ -214,10 +242,90 @@
             <span class="status-pill status-idle" id="submit-status">就绪</span>
             <button class="ghost-button small" id="pause-button" type="button" hidden>暂停</button>
             <button class="ghost-button small" id="distill-knowledge-button" type="button" hidden>沉淀</button>
+            <button class="ghost-button small" id="export-session-button" type="button" hidden>导出</button>
             <button class="ghost-button small" id="refresh-button" type="button">刷新</button>
           </div>
           <div class="session-meta" id="session-meta" hidden></div>
         </header>
+
+        <div class="right-sidebar-content">
+          <!-- Metrics Card -->
+          <div class="metrics-card" id="metrics-card" hidden>
+            <div class="metrics-grid">
+              <div class="metric-item">
+                <span class="metric-label">消息数</span>
+                <span class="metric-value" id="metric-messages">-</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">Token</span>
+                <span class="metric-value" id="metric-tokens">-</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">当前工具</span>
+                <span class="metric-value metric-tool" id="metric-tool">-</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">授权范围</span>
+                <span class="metric-value metric-scope" id="metric-scope">-</span>
+              </div>
+            </div>
+            <div class="metric-progress" id="metric-progress" hidden></div>
+            <div class="token-usage-bar" id="token-usage-bar" hidden>
+              <div class="token-usage-bar-label">
+                <span>Token 用量</span>
+                <span class="token-usage-bar-stats">
+                  <span id="token-usage-text">0 / 0</span>
+                  <span class="token-usage-cost" id="token-usage-cost" hidden></span>
+                  <span class="token-usage-cache" id="token-usage-cache" hidden></span>
+                </span>
+              </div>
+              <div class="token-usage-bar-track">
+                <div class="token-usage-bar-fill low" id="token-usage-fill" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Steps Panel -->
+          <details class="sidebar-panel" id="steps-panel" open data-panel-key="steps">
+            <summary class="sidebar-panel-header">
+              <span class="sidebar-panel-title">执行步骤</span>
+              <span class="sidebar-panel-badge" id="steps-count">0</span>
+              <span class="sidebar-panel-chevron" aria-hidden="true">&#9662;</span>
+            </summary>
+            <div class="sidebar-panel-body">
+              <div class="steps-list" id="steps-list"></div>
+            </div>
+          </details>
+
+          <!-- Findings Panel -->
+          <details class="sidebar-panel" id="findings-panel" open data-panel-key="findings">
+            <summary class="sidebar-panel-header">
+              <span class="sidebar-panel-title">安全发现</span>
+              <span class="sidebar-panel-badge" id="findings-count">0</span>
+              <span class="sidebar-panel-chevron" aria-hidden="true">&#9662;</span>
+            </summary>
+            <div class="sidebar-panel-body">
+              <div class="findings-list" id="findings-list"></div>
+            </div>
+          </details>
+
+          <!-- Shortcuts Panel -->
+          <details class="sidebar-panel" id="shortcuts-panel" data-panel-key="shortcuts">
+            <summary class="sidebar-panel-header">
+              <span class="sidebar-panel-title">快捷键</span>
+              <span class="sidebar-panel-chevron" aria-hidden="true">&#9662;</span>
+            </summary>
+            <div class="sidebar-panel-body">
+              <div class="shortcut-list">
+                <div class="shortcut-row"><span class="shortcut-label">发送消息</span><span class="shortcut-keys"><span class="kbd">&#8984;</span> + <span class="kbd">Enter</span></span></div>
+                <div class="shortcut-row"><span class="shortcut-label">新对话</span><span class="shortcut-keys"><span class="kbd">&#8984;</span> + <span class="kbd">N</span></span></div>
+                <div class="shortcut-row"><span class="shortcut-label">设置</span><span class="shortcut-keys"><span class="kbd">&#8984;</span> + <span class="kbd">,</span></span></div>
+                <div class="shortcut-row"><span class="shortcut-label">搜索消息</span><span class="shortcut-keys"><span class="kbd">&#8984;</span> + <span class="kbd">F</span></span></div>
+                <div class="shortcut-row"><span class="shortcut-label">切换主题</span><span class="shortcut-keys"><span class="kbd">&#8984;</span> + <span class="kbd">Shift</span> + <span class="kbd">D</span></span></div>
+              </div>
+            </div>
+          </details>
+        </div>
       </aside>
     </div>
 
@@ -296,6 +404,7 @@
         </div>
 
         <div class="settings-actions">
+          <button class="ghost-button" id="reload-config-button" type="button">重新加载配置</button>
           <button class="ghost-button" id="reset-settings" type="button">重置</button>
           <button class="primary-button" id="save-settings" type="button">完成</button>
         </div>
@@ -315,12 +424,15 @@
       {
         "imports": {
           "./api.js": "{{ request.url_for('static', path='api.js') }}?v={{ asset_version }}",
+          "./auth.js": "{{ request.url_for('static', path='auth.js') }}?v={{ asset_version }}",
+          "./utils.js": "{{ request.url_for('static', path='utils.js') }}?v={{ asset_version }}",
           "./render.js": "{{ request.url_for('static', path='render.js') }}?v={{ asset_version }}",
           "./state.js": "{{ request.url_for('static', path='state.js') }}?v={{ asset_version }}",
           "./markdown.js": "{{ request.url_for('static', path='markdown.js') }}?v={{ asset_version }}"
         }
       }
     </script>
+
     <script type="module" src="{{ request.url_for('static', path='app.js') }}?v={{ asset_version }}"></script>
   </body>
 </html>

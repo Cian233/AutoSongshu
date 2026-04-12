@@ -245,7 +245,7 @@ class ChatSessionState:
         return ""
 
     def summary_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "id": self.session_id,
             "object": "chat.session",
             "title": self.title,
@@ -262,6 +262,24 @@ class ChatSessionState:
             "knowledge_base_ids": list(self.knowledge_base_ids),
             "knowledge_base_count": len(self.knowledge_base_ids),
         }
+        # Include token_usage so SSE session.upsert events preserve the count
+        if self.conversation is not None and hasattr(self.conversation, "cost_tracker"):
+            tracker = self.conversation.cost_tracker
+            if hasattr(tracker, "summary_dict"):
+                model_name = self._get_model_name()
+                result["token_usage"] = tracker.summary_dict(model_name=model_name)
+        return result
+
+    def _get_model_name(self) -> str:
+        """Extract the model name from the conversation config if available."""
+        try:
+            if self.conversation is not None and hasattr(self.conversation, "config"):
+                cfg = self.conversation.config
+                if hasattr(cfg, "model") and hasattr(cfg.model, "model_name"):
+                    return str(cfg.model.model_name or "").strip()
+        except Exception:
+            pass
+        return ""
 
     def detail_dict(self) -> dict[str, Any]:
         payload = self.summary_dict()
@@ -283,7 +301,8 @@ class ChatSessionState:
         if self.conversation is not None and hasattr(self.conversation, "cost_tracker"):
             tracker = self.conversation.cost_tracker
             if hasattr(tracker, "summary_dict"):
-                payload["token_usage"] = tracker.summary_dict()
+                model_name = self._get_model_name()
+                payload["token_usage"] = tracker.summary_dict(model_name=model_name)
         return payload
 
     def persistence_dict(self) -> dict[str, Any]:

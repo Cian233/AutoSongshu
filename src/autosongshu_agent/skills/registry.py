@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import os
+from collections import deque
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -23,6 +26,8 @@ from .models import (
 
 
 class SkillRegistry:
+    _log = logging.getLogger("autosongshu.skills")
+
     def __init__(
         self, directories: list[str], context: SkillRuntimeContext | None = None
     ) -> None:
@@ -37,6 +42,12 @@ class SkillRegistry:
         )
         registered_names: dict[str, str] = {}
         seen_paths: set[str] = set()
+
+        self._log.info(
+            "Skill loading started: directories=%s, available_tools=%s",
+            self.directories,
+            self.context.available_tools if self.context else "N/A",
+        )
 
         for raw_dir in self.directories:
             base = Path(raw_dir).expanduser()
@@ -78,6 +89,7 @@ class SkillRegistry:
                 try:
                     loaded_skill = self._load_skill(skill_dir, base)
                 except Exception as exc:
+                    self._log.warning("Failed to load skill from %s: %s", resolved_skill_dir, exc)
                     report.failed.append(
                         SkillLoadEvent(
                             status="failed",
@@ -106,6 +118,7 @@ class SkillRegistry:
 
                 availability_reason = self._availability_reason(loaded_skill)
                 if availability_reason is not None:
+                    self._log.info("Skipped skill %s: %s", loaded_skill.name, availability_reason)
                     report.skipped.append(
                         SkillLoadEvent(
                             status="skipped",
@@ -121,6 +134,7 @@ class SkillRegistry:
                     try:
                         toolkit.register_agent_skill(loaded_skill.directory)
                     except Exception as exc:
+                        self._log.warning("Failed to register skill %s with AgentScope: %s", loaded_skill.name, exc)
                         report.failed.append(
                             SkillLoadEvent(
                                 status="failed",
@@ -131,12 +145,27 @@ class SkillRegistry:
                             ),
                         )
                         continue
+                    self._log.info("Loaded skill: %s (%s)", loaded_skill.name, loaded_skill.directory)
                     report.loaded.append(loaded_skill)
                 else:
                     report.manual_available.append(loaded_skill)
 
                 registered_names[loaded_skill.canonical_name] = loaded_skill.directory
                 seen_paths.add(loaded_skill.directory)
+
+        self._log.info(
+            "Skill loading finished: %d loaded, %d manual, %d skipped, %d failed",
+            len(report.loaded),
+            len(report.manual_available),
+            len(report.skipped),
+            len(report.failed),
+        )
+        if report.skipped:
+            for evt in report.skipped:
+                self._log.info("  skipped: %s — %s", evt.name, evt.reason)
+        if report.failed:
+            for evt in report.failed:
+                self._log.warning("  failed: %s — %s", evt.name or evt.path, evt.reason)
 
         return report
 
@@ -145,9 +174,9 @@ class SkillRegistry:
             return [base]
 
         candidates: list[Path] = []
-        queue: list[Path] = [base]
+        queue: deque[Path] = deque([base])
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             try:
                 children = sorted(current.iterdir(), key=lambda item: item.name.lower())
             except OSError:
@@ -201,6 +230,12 @@ class SkillRegistry:
             )
         ]
         host_patterns = [item for item in host_patterns if item]
+        version = str(metadata.get("version") or "").strip()
+        tags = _coerce_string_list(metadata.get("tags"), "tags")
+        env_required = _coerce_string_list(metadata.get("env_required"), "env_required")
+        requires_bins = _coerce_string_list(metadata.get("requires_bins"), "requires_bins")
+        timeout = int(metadata.get("timeout") or 0)
+        when_to_use = str(metadata.get("when_to_use") or "").strip()
         scripts = _discover_skill_scripts(skill_dir)
         scripts_dir = (
             str((skill_dir / SKILL_SCRIPTS_DIR).resolve()) if scripts else None
@@ -217,6 +252,12 @@ class SkillRegistry:
             requires_browser=requires_browser,
             requires_sandbox=requires_sandbox,
             host_patterns=host_patterns,
+            version=version,
+            tags=tags,
+            env_required=env_required,
+            requires_bins=requires_bins,
+            timeout=timeout,
+            when_to_use=when_to_use,
             scripts_dir=scripts_dir,
             scripts=scripts,
         )
@@ -236,6 +277,24 @@ class SkillRegistry:
         if skill.requires_sandbox and not self.context.sandbox_enabled:
             return "Sandbox support is disabled for this run."
 
+        if skill.requires_bins:
+            import shutil
+
+            missing_bins = [
+                bin_name for bin_name in skill.requires_bins
+                if shutil.which(bin_name) is None
+            ]
+            if missing_bins:
+                return f"Missing required binaries: {', '.join(missing_bins)}."
+
+        if skill.env_required:
+            missing_env = [
+                env_name for env_name in skill.env_required
+                if not os.environ.get(env_name)
+            ]
+            if missing_env:
+                return f"Missing required environment variables: {', '.join(missing_env)}."
+
         if skill.host_patterns:
             if not self.context.active_hosts:
                 return "No active hosts are available to evaluate this skill's host_patterns."
@@ -254,18 +313,19 @@ class SkillRegistry:
 
 
 def _active_tool_names(toolkit: Toolkit) -> set[str]:
-    tools = getattr(toolkit, "tools", {}) or {}
-    groups = getattr(toolkit, "groups", {}) or {}
-    active_tools: set[str] = set()
+    """Return the set of tool names that are currently registered and active.
 
-    for name, registered in tools.items():
-        group_name = getattr(registered, "group", "basic")
-        if group_name == "basic":
-            active_tools.add(str(name))
-            continue
-        group = groups.get(group_name)
-        if group is not None and bool(getattr(group, "active", False)):
-            active_tools.add(str(name))
+    Instead of probing AgentScope's internal Toolkit structure (which may
+    change between versions), we read from our own registry which tracks
+    every tool registered via @registry.register().
+    """
+    from ..tool_impls.registry import registry as tool_registry
+
+    active_tools: set[str] = set()
+    for info in tool_registry.tools:
+        active_tools.add(info.func.__name__)
+    _log = logging.getLogger("autosongshu.skills")
+    _log.debug("_active_tool_names: found %d tools: %s", len(active_tools), sorted(active_tools))
     return active_tools
 
 
@@ -275,9 +335,9 @@ def _discover_skill_scripts(skill_dir: Path) -> list[SkillScript]:
         return []
 
     scripts: list[SkillScript] = []
-    queue: list[Path] = [scripts_root]
+    queue: deque[Path] = deque([scripts_root])
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()
         try:
             children = sorted(current.iterdir(), key=lambda item: item.name.lower())
         except OSError:
@@ -311,7 +371,7 @@ def _parse_skill_file(path: Path) -> tuple[dict[str, Any], str]:
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise ValueError(f"Unable to read {path.name}: {exc}") from exc
+        raise ValueError(f"Unable to read {path}: {exc}") from exc
 
     metadata_text, body = _split_front_matter(raw)
     try:

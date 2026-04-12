@@ -96,6 +96,12 @@ class LoadedSkill:
     requires_browser: bool = False
     requires_sandbox: bool = False
     host_patterns: list[str] = field(default_factory=list)
+    version: str = ""
+    tags: list[str] = field(default_factory=list)
+    env_required: list[str] = field(default_factory=list)
+    requires_bins: list[str] = field(default_factory=list)
+    timeout: int = 0  # 0 means use global default
+    when_to_use: str = ""  # natural language hint for model auto-discovery
     scripts_dir: str | None = None
     scripts: list[SkillScript] = field(default_factory=list)
 
@@ -152,7 +158,10 @@ class LoadedSkill:
     def index_line(self) -> str:
         activation = "auto" if self.auto_activate else "manual"
         delivery = "scripted" if self.scripts else "notes-only"
-        return f"- {self.name} [{activation}; {delivery}]: {self.description}"
+        parts = [f"- {self.name} [{activation}; {delivery}]: {self.description}"]
+        if self.tags:
+            parts[0] += f" (tags: {', '.join(self.tags)})"
+        return parts[0]
 
 
 @dataclass(slots=True)
@@ -201,61 +210,34 @@ class SkillLoadReport:
         if not self.loaded and not self.manual_available:
             return None
 
-        sections: list[str] = []
         available = sorted(
             self.all_available,
             key=lambda item: (item.activation_mode != "auto", item.name.lower()),
         )
-        sections.append(
-            (
-                "Local skill index for this run. When a task matches one of these descriptions, prefer using the "
-                "named skill instead of improvising a brand-new workflow."
-            ),
+
+        lines = ["<available-skills>"]
+        lines.append(
+            "The following local skills are available. When a task matches a skill's description, "
+            "use `list_skill_scripts(skill_name=...)` to inspect it, then `run_skill_script(...)` to execute. "
+            "Prefer using existing skills over writing ad-hoc code."
         )
-        sections.extend(skill.index_line() for skill in available[:24])
-        if len(available) > 24:
-            sections.append(f"... and {len(available) - 24} more local skills.")
+        lines.append("")
+
+        for skill in available:
+            line = f"- {skill.name} [{skill.activation_mode}; {'scripted' if skill.scripts else 'notes-only'}]: {skill.description}"
+            if skill.when_to_use:
+                line += f" — {skill.when_to_use}"
+            lines.append(line)
+
         if any(skill.scripts for skill in available):
-            sections.append(
-                (
-                    "When a loaded local scripted skill already fits the task, prefer `list_skill_scripts(...)` and "
-                    "`run_skill_script(...)` before falling back to ad-hoc sandbox code."
-                ),
-            )
-        sections.append(
-            (
+            lines.append("")
+            lines.append(
                 "For scripted skills, inspect them with `list_skill_scripts()` or "
-                "`list_skill_scripts(skill_name=...)`, then execute them with `run_skill_script(...)` when relevant."
-            ),
-        )
-
-        if self.loaded:
-            sections.append(
-                (
-                    "The following local skills are auto-loaded into this run. "
-                    "Use them when their descriptions match the task, and follow their workflow, notes, "
-                    "constraints, and evidence requirements."
-                ),
+                "`list_skill_scripts(skill_name=...)`, then execute with `run_skill_script(...)`."
             )
-            sections.extend(skill.prompt_block() for skill in self.loaded)
 
-        if self.manual_available:
-            sections.append(
-                (
-                    "The following local manual skills are available on demand. "
-                    "Their full SKILL.md bodies are not injected by default. Some ship scripts that you can inspect "
-                    "with `list_skill_scripts()` and execute with `run_skill_script(...)`; others require the operator "
-                    "to explicitly enable them with `/skill skill-name` before their full instructions become active."
-                ),
-            )
-            preview = self.manual_available[:12]
-            sections.extend(skill.summary_block() for skill in preview)
-            if len(self.manual_available) > len(preview):
-                sections.append(
-                    f"... and {len(self.manual_available) - len(preview)} more on-demand skills."
-                )
-
-        return "\n\n".join(sections).strip()
+        lines.append("</available-skills>")
+        return "\n".join(lines).strip()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -321,6 +303,7 @@ class SkillRuntimeContext:
     available_tools: set[str] = field(default_factory=set)
     sandbox_enabled: bool = False
     active_hosts: set[str] = field(default_factory=set)
+    available_bins: set[str] = field(default_factory=set)
 
     @classmethod
     def from_runtime(cls, toolkit: "Toolkit", config: Any) -> "SkillRuntimeContext":

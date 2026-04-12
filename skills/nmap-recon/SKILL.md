@@ -2,9 +2,14 @@
 name: nmap-recon
 description: Scoped host-level reconnaissance with the bundled Nmap distribution. Use when the operator explicitly asks for nmap, port scanning, service enumeration, host reachability checks, or low-risk host discovery on authorized targets.
 activation: auto
+version: "1.0"
+tags: [recon, network, port-scan]
 requires_tools:
   - list_skill_scripts
   - run_skill_script
+requires_bins:
+  - nmap
+when_to_use: "When the operator asks for port scanning, service enumeration, host discovery, or nmap-related tasks."
 ---
 
 # Nmap Recon

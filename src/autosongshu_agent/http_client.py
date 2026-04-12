@@ -183,6 +183,61 @@ class ScopedHttpClient:
         )
         return self._serialize_response(response, history=history)
 
+    def raw_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        raw_body: str | None = None,
+        content_type: str = "application/octet-stream",
+        follow_redirects: bool = False,
+    ) -> dict[str, Any]:
+        """Send a request with a raw string body (no JSON serialization).
+
+        The *raw_body* is transmitted byte-for-byte as provided, which
+        prevents double-encoding of percent-encoded characters such as
+        ``%0A``.  Use this when you need precise control over the exact
+        bytes sent on the wire (e.g. testing WAF rules, exploiting CRLF
+        injection, sending crafted payloads).
+        """
+        self._guard_request_budget()
+        target_url = self.scope.assert_in_scope(url)
+        self.request_count += 1
+
+        req_headers = headers or {}
+        if raw_body is not None and "content-type" not in {k.lower() for k in req_headers}:
+            req_headers["content-type"] = content_type
+
+        response = self.client.request(
+            method.upper(),
+            target_url,
+            params=params,
+            headers=req_headers,
+            content=raw_body.encode("utf-8", errors="surrogateescape") if raw_body is not None else None,
+            follow_redirects=False,
+        )
+
+        history: list[dict[str, Any]] = []
+        if follow_redirects:
+            response, history = self._follow_redirects(
+                method, response, headers=req_headers
+            )
+
+        self._log(
+            {
+                "method": method.upper(),
+                "url": target_url,
+                "params": params,
+                "headers": req_headers,
+                "status_code": response.status_code,
+                "history": history,
+                "raw_body_length": len(raw_body) if raw_body else 0,
+            },
+        )
+        return self._serialize_response(response, history=history)
+
     def discover_surface(
         self,
         url: str,

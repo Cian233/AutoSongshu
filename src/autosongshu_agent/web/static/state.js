@@ -1,3 +1,9 @@
+// Re-export from split modules for backward compatibility
+export { setApiToken, getApiToken } from "./auth.js";
+export { byId, escapeHtml, truncate, formatDate, normalizeLines, sanitizeUrl } from "./utils.js";
+
+import { getApiToken } from "./auth.js";
+
 export const state = {
   sessions: [],
   sessionDetails: new Map(),
@@ -24,12 +30,27 @@ export const state = {
   chatTouchStartY: null,
   chatLastScrollTop: 0,
   isDistillingKnowledge: false,
+  findings: [],
+  findingsSessionId: null,
+  steps: [],
+  stepsSessionId: null,
+  progress: null,
+  progressSessionId: null,
+  panelExpansion: {
+    steps: true,
+    findings: true,
+    shortcuts: false,
+  },
+  theme: "system",
 };
 
 const DEFAULT_FETCH_TIMEOUT_MS = 12000;
 
-export function byId(id) {
-  return document.getElementById(id);
+export function togglePanel(panelKey) {
+  if (!state.panelExpansion) {
+    state.panelExpansion = {};
+  }
+  state.panelExpansion[panelKey] = !state.panelExpansion[panelKey];
 }
 
 export function isAssistantPartExpanded(key, fallback = false) {
@@ -77,54 +98,6 @@ export function isMessageRenderingFrozen(messageId) {
   return Number(state.messageRenderFreeze.get(String(messageId || "").trim()) || 0) > 0;
 }
 
-export function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-export function truncate(text, length = 72) {
-  const value = String(text ?? "").trim();
-  if (!value) {
-    return "";
-  }
-  if (value.length <= length) {
-    return value;
-  }
-  return `${value.slice(0, length - 1)}…`;
-}
-
-export function formatDate(value) {
-  if (!value) {
-    return "—";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString();
-}
-
-export function normalizeLines(value) {
-  return String(value ?? "")
-    .split(/\r?\n/g)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-export function sanitizeUrl(value) {
-  try {
-    const url = new URL(String(value || ""), window.location.href);
-    if (["http:", "https:", "mailto:"].includes(url.protocol)) {
-      return url.toString();
-    }
-  } catch (_) {}
-  return "";
-}
-
 export async function fetchJson(url, options = {}) {
   const { timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, ...fetchOptions } = options || {};
   const controller =
@@ -137,6 +110,12 @@ export async function fetchJson(url, options = {}) {
 
   let response;
   try {
+    // Inject API token if available
+    const apiToken = getApiToken();
+    if (apiToken) {
+      fetchOptions.headers = fetchOptions.headers || {};
+      fetchOptions.headers["Authorization"] = `Bearer ${apiToken}`;
+    }
     response = await fetch(url, controller ? { ...fetchOptions, signal: controller.signal } : fetchOptions);
   } catch (error) {
     if (timer !== null) {

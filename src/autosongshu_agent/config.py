@@ -335,6 +335,11 @@ class ModelConfig(BaseModel):
             _get_first_env("AUTOSONGSHU_MODEL_TIMEOUT") or 120.0
         ),
     )
+    fallbacks: list[str] = Field(
+        default_factory=list,
+        description="List of fallback model names to try when the primary model fails "
+                    "(e.g. on 429/500/503 errors).",
+    )
 
 
 class BrowserConfig(BaseModel):
@@ -348,6 +353,11 @@ class BrowserConfig(BaseModel):
     timeout_ms: int = 12000
     viewport_width: int = 1440
     viewport_height: int = 900
+    max_network_events: int = 1200
+    max_console_events: int = 400
+    max_response_bodies: int = 400
+    max_cdp_request_records: int = 600
+    response_body_preview_chars: int = 12000
 
     @model_validator(mode="after")
     def validate_browser_mode(self) -> "BrowserConfig":
@@ -450,7 +460,7 @@ class AgentConfig(BaseModel):
     max_iters: int = 12
     max_subtasks: int = 8
     parallel_tool_calls: bool = False
-    enable_meta_tool: bool = False
+    enable_meta_tool: bool = True
     loop_guard_enabled: bool = True
     mode: Literal["auto", "semi-auto"] = "auto"
 

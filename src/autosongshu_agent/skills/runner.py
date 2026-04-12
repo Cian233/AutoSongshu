@@ -110,7 +110,10 @@ class SkillScriptRunner:
         skill = self._require_skill(skill_name)
         script = self._resolve_script(skill, script_name)
         command = [*self._build_command(script), *(str(item) for item in (args or []))]
-        environment = os.environ.copy()
+
+        # Save original env for restoration
+        _original_env = os.environ.copy()
+        environment = _original_env.copy()
         environment["PYTHONUTF8"] = "1"
         environment["AUTOSONGSHU_SKILL_NAME"] = skill.name
         environment["AUTOSONGSHU_SKILL_DIR"] = skill.directory
@@ -127,69 +130,77 @@ class SkillScriptRunner:
         if self.authorization:
             environment["AUTOSONGSHU_AUTHORIZATION"] = self.authorization
 
-        started = time.monotonic()
         try:
-            completed = subprocess.run(
-                command,
-                cwd=skill.directory,
-                env=environment,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_sec,
-                check=False,
-            )
-            duration_sec = round(time.monotonic() - started, 3)
-            result = {
-                "ok": completed.returncode == 0,
-                "exit_code": completed.returncode,
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
-                "timed_out": False,
-                "duration_sec": duration_sec,
-            }
-        except subprocess.TimeoutExpired as exc:
-            duration_sec = round(time.monotonic() - started, 3)
-            result = {
-                "ok": False,
-                "exit_code": None,
-                "stdout": exc.stdout or "",
-                "stderr": exc.stderr
-                or f"Command timed out after {timeout_sec} seconds.",
-                "timed_out": True,
-                "duration_sec": duration_sec,
-            }
+            started = time.monotonic()
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=skill.directory,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout_sec,
+                    check=False,
+                )
+                duration_sec = round(time.monotonic() - started, 3)
+                result = {
+                    "ok": completed.returncode == 0,
+                    "exit_code": completed.returncode,
+                    "stdout": completed.stdout,
+                    "stderr": completed.stderr,
+                    "timed_out": False,
+                    "duration_sec": duration_sec,
+                }
+            except subprocess.TimeoutExpired as exc:
+                duration_sec = round(time.monotonic() - started, 3)
+                result = {
+                    "ok": False,
+                    "exit_code": None,
+                    "stdout": exc.stdout or "",
+                    "stderr": exc.stderr
+                    or f"Command timed out after {timeout_sec} seconds.",
+                    "timed_out": True,
+                    "duration_sec": duration_sec,
+                }
 
-        payload = {
-            "ok": result["ok"],
-            "exit_code": result["exit_code"],
-            "timed_out": result["timed_out"],
-            "duration_sec": result["duration_sec"],
-            "command": command,
-            "cwd": skill.directory,
-            "skill": {
-                "name": skill.name,
-                "directory": skill.directory,
-            },
-            "script": self._serialize_script(script),
-            "args": [str(item) for item in (args or [])],
-            "stdout": _truncate_text(result["stdout"], max_output_chars),
-            "stderr": _truncate_text(result["stderr"], max_output_chars),
-        }
-        self.artifacts.append_jsonl(
-            "skill-scripts.jsonl",
-            {
-                "skill": skill.name,
-                "script": script.relative_path,
-                "args": payload["args"],
-                "ok": payload["ok"],
-                "exit_code": payload["exit_code"],
-                "timed_out": payload["timed_out"],
-                "duration_sec": payload["duration_sec"],
-            },
-        )
-        return payload
+            payload = {
+                "ok": result["ok"],
+                "exit_code": result["exit_code"],
+                "timed_out": result["timed_out"],
+                "duration_sec": result["duration_sec"],
+                "command": command,
+                "cwd": skill.directory,
+                "skill": {
+                    "name": skill.name,
+                    "directory": skill.directory,
+                },
+                "script": self._serialize_script(script),
+                "args": [str(item) for item in (args or [])],
+                "stdout": _truncate_text(result["stdout"], max_output_chars),
+                "stderr": _truncate_text(result["stderr"], max_output_chars),
+            }
+            self.artifacts.append_jsonl(
+                "skill-scripts.jsonl",
+                {
+                    "skill": skill.name,
+                    "script": script.relative_path,
+                    "args": payload["args"],
+                    "ok": payload["ok"],
+                    "exit_code": payload["exit_code"],
+                    "timed_out": payload["timed_out"],
+                    "duration_sec": payload["duration_sec"],
+                },
+            )
+            return payload
+        finally:
+            # Restore original environment variables
+            try:
+                os.environ.clear()
+                os.environ.update(_original_env)
+            except Exception:
+                pass
 
     def _require_skill(self, skill_name: str) -> LoadedSkill:
         canonical_name = skill_name.strip().lower()

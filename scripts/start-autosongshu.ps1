@@ -10,6 +10,9 @@ param(
     [switch]$SkipInitStatusChecks,
     [switch]$SkipInitPythonRuntimeCheck,
     [switch]$SkipInitPythonRuntimeRepair,
+    [switch]$SkipFrontendBuild,
+    [switch]$FrontendDev,
+    [int]$FrontendDevPort = 5173,
     [switch]$LaunchCdpBrowser,
     [ValidateSet("chrome", "edge")]
     [string]$CdpBrowser = "chrome",
@@ -109,6 +112,13 @@ Write-Step "Project root: $ProjectRoot"
 Write-Step "Web console URL: $ConsoleUrl"
 $InitBuildExecuted = $false
 
+if ($FrontendDev) {
+    Write-Step "Frontend dev mode enabled. Skipping production frontend build."
+    if (-not $SkipFrontendBuild) {
+        $SkipFrontendBuild = $true
+    }
+}
+
 if (-not $SkipInitBuild) {
     if (-not (Test-Path -LiteralPath $InitBuildScriptPath)) {
         throw "Init build script not found: $InitBuildScriptPath"
@@ -141,6 +151,9 @@ if (-not $SkipInitBuild) {
     }
     if ($SkipInitPythonRuntimeRepair) {
         $initArgs += "-SkipPythonRuntimeRepair"
+    }
+    if ($SkipFrontendBuild) {
+        $initArgs += "-SkipFrontendBuild"
     }
     if ($DryRun) {
         $initArgs += "-DryRun"
@@ -246,9 +259,39 @@ Start-Process powershell.exe -ArgumentList @(
 
 Start-Sleep -Seconds 2
 
+# ── Frontend dev server (optional) ──────────────────────────────────
+$FrontendDir = Join-Path $ProjectRoot "frontend"
+if ($FrontendDev -and (Test-Path -LiteralPath (Join-Path $FrontendDir "package.json"))) {
+    if (-not (Test-CommandExists "node") -or -not (Test-CommandExists "npm")) {
+        Write-Warning "Node.js/npm not found. Cannot start frontend dev server."
+    }
+    else {
+        $FrontendDevUrl = "http://localhost:$FrontendDevPort"
+        Write-Step "Starting Vite frontend dev server on port $FrontendDevPort..."
+        $FrontendDevCommand = "Set-Location -LiteralPath '$FrontendDir'; npm run dev -- --port $FrontendDevPort"
+        Write-Host "Command: $FrontendDevCommand" -ForegroundColor DarkGray
+
+        Start-Process powershell.exe -ArgumentList @(
+            "-NoExit",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            $FrontendDevCommand
+        ) | Out-Null
+
+        Start-Sleep -Seconds 2
+        Write-Step "Frontend dev server running at: $FrontendDevUrl"
+        Write-Host "  The dev server proxies API requests to the FastAPI backend." -ForegroundColor DarkGray
+    }
+}
+elseif ($FrontendDev) {
+    Write-Warning "-FrontendDev was specified but frontend/package.json not found. Skipping."
+}
+
 if (-not $NoOpenBrowser) {
     Write-Step "Opening browser..."
-    Start-Process $ConsoleUrl | Out-Null
+    $OpenUrl = if ($FrontendDev) { "http://localhost:$FrontendDevPort" } else { $ConsoleUrl }
+    Start-Process $OpenUrl | Out-Null
 }
 
 Write-Step "Done. If the browser did not open automatically, visit: $ConsoleUrl"

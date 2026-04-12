@@ -2,6 +2,8 @@
 name: recon-web
 description: Safe first-pass web reconnaissance workflow for browser-assisted pentesting. Use when starting assessment on a web app, mapping exposed pages and flows, collecting passive evidence, or deciding whether deeper scripted discovery such as dirsearch, nmap, or sqlmap is justified.
 activation: auto
+version: "1.0"
+tags: [recon, web, browser]
 requires_browser: true
 requires_tools:
   - browser_navigate
@@ -14,6 +16,7 @@ requires_tools:
   - http_request
   - list_skill_scripts
   - record_finding
+when_to_use: "When starting a new web assessment, mapping pages and flows, or doing initial passive reconnaissance."
 ---
 
 # Recon Web

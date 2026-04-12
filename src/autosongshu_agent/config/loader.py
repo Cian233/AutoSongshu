@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +12,14 @@ import yaml
 from dotenv import load_dotenv
 
 from .models import AppConfig
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Global config cache & reload lock
+# ---------------------------------------------------------------------------
+_config_cache: dict[str, AppConfig] = {}
+_config_lock = threading.Lock()
 
 
 _ENV_ONLY_PATTERN = re.compile(
@@ -263,7 +273,71 @@ def load_config(path: str | Path) -> AppConfig:
     expanded = _expand_env_values(raw)
     expanded = _apply_env_overrides(expanded)
     config = AppConfig.model_validate(expanded)
-    return config.resolve_paths(config_path.parent)
+    resolved = config.resolve_paths(config_path.parent)
+    # Cache the resolved config for later reloads
+    with _config_lock:
+        _config_cache[str(config_path)] = resolved
+    return resolved
+
+
+def reload_config(path: str | Path) -> AppConfig:
+    """Reload configuration from a YAML file, with thread-safety and error handling.
+
+    This re-reads the YAML file from disk, re-applies environment variable
+    overrides, validates the result, and updates the global config cache.
+    Existing sessions that already hold a reference to the old ``AppConfig``
+    instance are **not** affected -- only future ``load_config`` / ``reload_config``
+    calls and callers that explicitly request the reloaded config will see the
+    new values.
+
+    Args:
+        path: Path to the YAML configuration file.
+
+    Returns:
+        The newly loaded :class:`AppConfig`.
+
+    Raises:
+        FileNotFoundError: If *path* does not exist.
+        ValueError: If the YAML content is invalid.
+    """
+    config_path = Path(path).resolve()
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with _config_lock:
+        try:
+            # Re-read env files so that .env changes are picked up
+            _load_env_files(config_path)
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            expanded = _expand_env_values(raw)
+            expanded = _apply_env_overrides(expanded)
+            config = AppConfig.model_validate(expanded)
+            resolved = config.resolve_paths(config_path.parent)
+            _config_cache[str(config_path)] = resolved
+            logger.info("Configuration reloaded successfully from %s", config_path)
+            return resolved
+        except (yaml.YAMLError, ValueError) as exc:
+            logger.error(
+                "Failed to reload configuration from %s: %s", config_path, exc
+            )
+            raise
+        except Exception as exc:
+            logger.error(
+                "Unexpected error reloading configuration from %s: %s",
+                config_path,
+                exc,
+            )
+            raise ValueError(
+                f"Unexpected error reloading config: {exc}"
+            ) from exc
+
+
+def get_cached_config(path: str | Path) -> AppConfig | None:
+    """Return the cached config for *path* if available, without re-reading disk."""
+    key = str(Path(path).resolve())
+    with _config_lock:
+        return _config_cache.get(key)
 
 
 __all__ = [

@@ -6,7 +6,19 @@ from typing import Any
 
 
 _LOOP_GUARD_META_TOOLS = frozenset(
-    {"create_plan", "update_subtask_state", "plan_subtasks", "get_plan_status"}
+    {
+        "create_plan",
+        "view_subtasks",
+        "revise_current_plan",
+        "update_subtask_state",
+        "finish_subtask",
+        "finish_plan",
+        "view_historical_plans",
+        "recover_historical_plan",
+        # Legacy names (older AgentScope versions)
+        "plan_subtasks",
+        "get_plan_status",
+    }
 )
 
 

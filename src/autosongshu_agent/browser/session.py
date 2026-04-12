@@ -18,9 +18,6 @@ from ..artifacts import ArtifactStore
 from ..config import BrowserConfig, ScopePolicy
 from ..utils import now_iso
 from .utils import (
-    MAX_CONSOLE_EVENTS,
-    MAX_NETWORK_EVENTS,
-    MAX_RESPONSE_BODIES,
     append_bounded,
     is_textual_content_type,
     is_textual_resource,
@@ -43,6 +40,12 @@ class CDPBrowserSession:
         self.context: BrowserContext | None = None
         self.page: Page | None = None
         self.cdp_session: CDPSession | None = None
+        self._max_network_events: int = getattr(settings, "max_network_events", 1200)
+        self._max_console_events: int = getattr(settings, "max_console_events", 400)
+        self._max_response_bodies: int = getattr(settings, "max_response_bodies", 400)
+        self._max_cdp_request_records: int = getattr(settings, "max_cdp_request_records", 600)
+        self._response_body_preview_chars: int = getattr(settings, "response_body_preview_chars", 12000)
+        self._events_lock = threading.RLock()
         self.network_events: list[dict[str, Any]] = []
         self.console_events: list[dict[str, Any]] = []
         self.response_bodies: list[dict[str, Any]] = []
@@ -82,7 +85,7 @@ class CDPBrowserSession:
             }
             self.cdp_request_details[request_id] = record
             self.cdp_request_order.append(request_id)
-            if len(self.cdp_request_order) > 600:
+            if len(self.cdp_request_order) > self._max_cdp_request_records:
                 oldest = self.cdp_request_order.pop(0)
                 self.cdp_request_details.pop(oldest, None)
         return record
@@ -172,7 +175,7 @@ class CDPBrowserSession:
 
         record["response_body_base64"] = bool(result.get("base64Encoded"))
         record["response_body_length"] = len(body)
-        record["response_body_preview"] = truncate_text(body, 12000)
+        record["response_body_preview"] = truncate_text(body, self._response_body_preview_chars)
         record["response_body_capture"] = (
             "base64" if result.get("base64Encoded") else "text"
         )
@@ -405,15 +408,16 @@ class CDPBrowserSession:
             return
 
         def on_console(msg: Any) -> None:
-            append_bounded(
-                self.console_events,
-                {
-                    "timestamp": now_iso(),
-                    "type": msg.type,
-                    "text": msg.text,
-                },
-                MAX_CONSOLE_EVENTS,
-            )
+            with self._events_lock:
+                append_bounded(
+                    self.console_events,
+                    {
+                        "timestamp": now_iso(),
+                        "type": msg.type,
+                        "text": msg.text,
+                    },
+                    self._max_console_events,
+                )
 
         def on_request(request: Any) -> None:
             post_data: str | None = None
@@ -422,38 +426,40 @@ class CDPBrowserSession:
                 post_data = candidate() if callable(candidate) else candidate
             except Exception:
                 post_data = None
-            append_bounded(
-                self.network_events,
-                {
-                    "timestamp": now_iso(),
-                    "phase": "request",
-                    "method": request.method,
-                    "url": request.url,
-                    "resource_type": request.resource_type,
-                    "headers": request.headers,
-                    "post_data_preview": truncate_text(post_data, 4000),
-                },
-                MAX_NETWORK_EVENTS,
-            )
+            with self._events_lock:
+                append_bounded(
+                    self.network_events,
+                    {
+                        "timestamp": now_iso(),
+                        "phase": "request",
+                        "method": request.method,
+                        "url": request.url,
+                        "resource_type": request.resource_type,
+                        "headers": request.headers,
+                        "post_data_preview": truncate_text(post_data, 4000),
+                    },
+                    self._max_network_events,
+                )
 
         def on_response(response: Any) -> None:
             request = response.request
             resource_type = request.resource_type
             content_type = response.headers.get("content-type")
-            append_bounded(
-                self.network_events,
-                {
-                    "timestamp": now_iso(),
-                    "phase": "response",
-                    "method": request.method,
-                    "url": response.url,
-                    "status": response.status,
-                    "resource_type": resource_type,
-                    "content_type": content_type,
-                    "headers": response.headers,
-                },
-                MAX_NETWORK_EVENTS,
-            )
+            with self._events_lock:
+                append_bounded(
+                    self.network_events,
+                    {
+                        "timestamp": now_iso(),
+                        "phase": "response",
+                        "method": request.method,
+                        "url": response.url,
+                        "status": response.status,
+                        "resource_type": resource_type,
+                        "content_type": content_type,
+                        "headers": response.headers,
+                    },
+                    self._max_network_events,
+                )
             if resource_type not in {
                 "document",
                 "xhr",
@@ -466,37 +472,39 @@ class CDPBrowserSession:
             preview: str | None = None
             if is_textual_content_type(content_type):
                 try:
-                    preview = truncate_text(response.text(), 12000)
+                    preview = truncate_text(response.text(), self._response_body_preview_chars)
                 except Exception:
                     preview = None
-            append_bounded(
-                self.response_bodies,
-                {
-                    "timestamp": now_iso(),
-                    "method": request.method,
-                    "url": response.url,
-                    "status": response.status,
-                    "resource_type": resource_type,
-                    "content_type": content_type,
-                    "request_headers": request.headers,
-                    "body_preview": preview,
-                },
-                MAX_RESPONSE_BODIES,
-            )
+            with self._events_lock:
+                append_bounded(
+                    self.response_bodies,
+                    {
+                        "timestamp": now_iso(),
+                        "method": request.method,
+                        "url": response.url,
+                        "status": response.status,
+                        "resource_type": resource_type,
+                        "content_type": content_type,
+                        "request_headers": request.headers,
+                        "body_preview": preview,
+                    },
+                    self._max_response_bodies,
+                )
 
         def on_request_failed(request: Any) -> None:
             failure = request.failure
-            append_bounded(
-                self.network_events,
-                {
-                    "timestamp": now_iso(),
-                    "phase": "request_failed",
-                    "method": request.method,
-                    "url": request.url,
-                    "failure": failure if isinstance(failure, str) else str(failure),
-                },
-                MAX_NETWORK_EVENTS,
-            )
+            with self._events_lock:
+                append_bounded(
+                    self.network_events,
+                    {
+                        "timestamp": now_iso(),
+                        "phase": "request_failed",
+                        "method": request.method,
+                        "url": request.url,
+                        "failure": failure if isinstance(failure, str) else str(failure),
+                    },
+                    self._max_network_events,
+                )
 
         self.page.on("console", on_console)
         self.page.on("request", on_request)
@@ -569,10 +577,40 @@ class CDPBrowserSession:
             )
         except Exception:
             pass
+
+        status = response.status if response else None
+
+        # Build a lightweight page summary so the agent (and user) can
+        # quickly understand what the page contains without a separate
+        # snapshot call.
+        try:
+            summary = page.evaluate(
+                """() => {
+                  const meta = document.querySelector('meta[name="description"]');
+                  const bodyText = (document.body?.innerText || "").trim();
+                  const forms = document.forms.length;
+                  const links = document.querySelectorAll('a[href]').length;
+                  const inputs = document.querySelectorAll('input, select, textarea').length;
+                  // Grab the first ~600 chars of visible text as a preview
+                  const excerpt = bodyText.slice(0, 600);
+                  return {
+                    title: document.title || null,
+                    meta_description: meta ? meta.content : null,
+                    text_preview: excerpt || null,
+                    forms_count: forms,
+                    links_count: links,
+                    inputs_count: inputs,
+                  };
+                }"""
+            )
+        except Exception:
+            summary = None
+
         return {
             "url": page.url,
             "title": page.title(),
-            "status": response.status if response else None,
+            "status": status,
+            "summary": summary,
         }
 
     def navigate(self, url: str) -> dict[str, Any]:
@@ -581,7 +619,11 @@ class CDPBrowserSession:
     def _click_impl(self, selector: str) -> dict[str, Any]:
         page = self._ensure_page()
         page.click(selector)
-        return {"clicked": selector, "url": page.url}
+        return {
+            "clicked": selector,
+            "url": page.url,
+            "title": page.title(),
+        }
 
     def click(self, selector: str) -> dict[str, Any]:
         return self._run_in_browser_thread(self._click_impl, selector)
@@ -593,7 +635,12 @@ class CDPBrowserSession:
         page.fill(selector, text)
         if submit:
             page.press(selector, "Enter")
-        return {"filled": selector, "submitted": submit, "url": page.url}
+        return {
+            "filled": selector,
+            "submitted": submit,
+            "url": page.url,
+            "title": page.title(),
+        }
 
     def fill(self, selector: str, text: str, submit: bool = False) -> dict[str, Any]:
         return self._run_in_browser_thread(self._fill_impl, selector, text, submit)
@@ -601,10 +648,107 @@ class CDPBrowserSession:
     def _press_impl(self, selector: str, key: str) -> dict[str, Any]:
         page = self._ensure_page()
         page.press(selector, key)
-        return {"selector": selector, "key": key, "url": page.url}
+        return {
+            "selector": selector,
+            "key": key,
+            "url": page.url,
+            "title": page.title(),
+        }
 
     def press(self, selector: str, key: str) -> dict[str, Any]:
         return self._run_in_browser_thread(self._press_impl, selector, key)
+
+    # ── New interaction tools ──────────────────────────────────────
+
+    def _hover_impl(self, selector: str) -> dict[str, Any]:
+        page = self._ensure_page()
+        page.hover(selector)
+        return {
+            "hovered": selector,
+            "url": page.url,
+            "title": page.title(),
+        }
+
+    def hover(self, selector: str) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._hover_impl, selector)
+
+    def _select_option_impl(self, selector: str, value: str | None = None, label: str | None = None) -> dict[str, Any]:
+        page = self._ensure_page()
+        if value is not None:
+            page.select_option(selector, value=value)
+        elif label is not None:
+            page.select_option(selector, label=label)
+        else:
+            raise ValueError("Either value or label must be provided.")
+        return {
+            "selector": selector,
+            "selected_value": value,
+            "selected_label": label,
+            "url": page.url,
+            "title": page.title(),
+        }
+
+    def select_option(self, selector: str, value: str | None = None, label: str | None = None) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._select_option_impl, selector, value, label)
+
+    def _go_back_impl(self) -> dict[str, Any]:
+        page = self._ensure_page()
+        page.go_back(wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state("networkidle", timeout=3000)
+        except Exception:
+            pass
+        return {"url": page.url, "title": page.title()}
+
+    def go_back(self) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._go_back_impl)
+
+    def _go_forward_impl(self) -> dict[str, Any]:
+        page = self._ensure_page()
+        page.go_forward(wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state("networkidle", timeout=3000)
+        except Exception:
+            pass
+        return {"url": page.url, "title": page.title()}
+
+    def go_forward(self) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._go_forward_impl)
+
+    def _get_element_impl(self, selector: str) -> dict[str, Any]:
+        page = self._ensure_page()
+        element = page.query_selector(selector)
+        if element is None:
+            return {"selector": selector, "found": False}
+        try:
+            tag = element.evaluate("el => el.tagName.toLowerCase()")
+            text = (element.inner_text() or "").strip()[:2000]
+            attrs = element.evaluate(
+                """el => {
+                  const attrs = {};
+                  for (const attr of el.attributes) {
+                    attrs[attr.name] = attr.value;
+                  }
+                  return attrs;
+                }"""
+            )
+            is_visible = element.is_visible()
+        except Exception:
+            tag = ""
+            text = ""
+            attrs = {}
+            is_visible = False
+        return {
+            "selector": selector,
+            "found": True,
+            "tag": tag,
+            "text": text or None,
+            "attributes": attrs,
+            "is_visible": is_visible,
+        }
+
+    def get_element(self, selector: str) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._get_element_impl, selector)
 
     def _evaluate_impl(self, script: str) -> Any:
         page = self._ensure_page()
@@ -811,6 +955,66 @@ class CDPBrowserSession:
         if self.context is None:
             raise RuntimeError("Browser context is not initialized.")
         return self.context.cookies()
+
+    def add_cookies(self, cookies: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._add_cookies_impl, cookies)
+
+    def _add_cookies_impl(self, cookies: list[dict[str, Any]]) -> dict[str, Any]:
+        if self.context is None:
+            self._start_impl()
+        if self.context is None:
+            raise RuntimeError("Browser context is not initialized.")
+        self.context.add_cookies(cookies)
+        return {"added": len(cookies), "url": self.page.url if self.page else None}
+
+    def clear_cookies(self) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._clear_cookies_impl)
+
+    def _clear_cookies_impl(self) -> dict[str, Any]:
+        if self.context is None:
+            self._start_impl()
+        if self.context is None:
+            raise RuntimeError("Browser context is not initialized.")
+        self.context.clear_cookies()
+        return {"cleared": True, "url": self.page.url if self.page else None}
+
+    def upload_file(self, selector: str, file_paths: list[str]) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._upload_file_impl, selector, file_paths)
+
+    def _upload_file_impl(self, selector: str, file_paths: list[str]) -> dict[str, Any]:
+        page = self._ensure_page()
+        page.set_input_files(selector, file_paths)
+        return {
+            "selector": selector,
+            "files": file_paths,
+            "url": page.url,
+            "title": page.title(),
+        }
+
+    def wait_for_url(self, pattern: str, timeout_ms: int = 10000) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._wait_for_url_impl, pattern, timeout_ms)
+
+    def _wait_for_url_impl(self, pattern: str, timeout_ms: int = 10000) -> dict[str, Any]:
+        page = self._ensure_page()
+        page.wait_for_url(pattern, timeout=timeout_ms)
+        return {"url": page.url, "title": page.title()}
+
+    def scroll_to(self, x: int = 0, y: int = 0, selector: str | None = None) -> dict[str, Any]:
+        return self._run_in_browser_thread(self._scroll_to_impl, x, y, selector)
+
+    def _scroll_to_impl(self, x: int, y: int, selector: str | None) -> dict[str, Any]:
+        page = self._ensure_page()
+        if selector:
+            page.evaluate(
+                """({ sel, x, y }) => {
+                  const el = document.querySelector(sel);
+                  if (el) el.scrollIntoView({ behavior: 'instant', block: 'start', inline: 'start' });
+                }""",
+                {"sel": selector, "x": x, "y": y},
+            )
+        else:
+            page.evaluate(f"window.scrollTo({x}, {y})")
+        return {"scrolled_to": {"x": x, "y": y}, "selector": selector}
 
     def get_network_log(self, limit: int | None = 100) -> list[dict[str, Any]]:
         return self._run_in_browser_thread(self._get_network_log_impl, limit)
@@ -1224,6 +1428,88 @@ class CDPBrowserSession:
             {"method": method, "params": params or {}, "result": result},
         )
         return result
+
+    # ── Script injection ───────────────────────────────────────────
+
+    def inject_script(self, script: str, world_name: str = "") -> dict[str, Any]:
+        """Add a script to be evaluated on every new document (before any page script).
+
+        Uses CDP Page.addScriptToEvaluateOnNewDocument.  The script persists
+        across navigations until explicitly removed via remove_script().
+        """
+        return self._run_in_browser_thread(self._inject_script_impl, script, world_name)
+
+    def _inject_script_impl(self, script: str, world_name: str = "") -> dict[str, Any]:
+        self._start_impl()
+        if self.cdp_session is None:
+            raise RuntimeError("CDP session is not available.")
+        params: dict[str, Any] = {"source": script}
+        if world_name:
+            params["worldName"] = world_name
+        result = self.cdp_session.send(
+            "Page.addScriptToEvaluateOnNewDocument", params
+        )
+        script_id = result.get("identifier", "")
+        self.artifacts.append_jsonl(
+            "cdp-log.jsonl",
+            {"method": "Page.addScriptToEvaluateOnNewDocument", "params": params, "result": result},
+        )
+        return {"injected": True, "script_id": script_id, "world_name": world_name or "main"}
+
+    def add_init_script(self, script: str) -> dict[str, Any]:
+        """Add an initialization script via Playwright's page.add_init_script().
+
+        Unlike inject_script (CDP), this is Playwright-level and works even
+        before CDP is attached.  The script runs before any page script on
+        every navigation.
+        """
+        return self._run_in_browser_thread(self._add_init_script_impl, script)
+
+    def _add_init_script_impl(self, script: str) -> dict[str, Any]:
+        page = self._ensure_page()
+        page.add_init_script(script)
+        return {"injected": True, "method": "playwright_init_script"}
+
+    def remove_script(self, script_id: str) -> dict[str, Any]:
+        """Remove a previously injected script by its CDP identifier."""
+        return self._run_in_browser_thread(self._remove_script_impl, script_id)
+
+    def _remove_script_impl(self, script_id: str) -> dict[str, Any]:
+        self._start_impl()
+        if self.cdp_session is None:
+            raise RuntimeError("CDP session is not available.")
+        self.cdp_session.send(
+            "Page.removeScriptToEvaluateOnNewDocument",
+            {"identifier": script_id},
+        )
+        self.artifacts.append_jsonl(
+            "cdp-log.jsonl",
+            {"method": "Page.removeScriptToEvaluateOnNewDocument", "params": {"identifier": script_id}},
+        )
+        return {"removed": True, "script_id": script_id}
+
+    def list_injected_scripts(self) -> list[dict[str, Any]]:
+        """List all scripts that have been injected via CDP addScriptToEvaluateOnNewDocument.
+
+        Returns the list of {identifier, source} objects from the browser.
+        """
+        return self._run_in_browser_thread(self._list_injected_scripts_impl)
+
+    def _list_injected_scripts_impl(self) -> list[dict[str, Any]]:
+        self._start_impl()
+        if self.cdp_session is None:
+            raise RuntimeError("CDP session is not available.")
+        result = self.cdp_session.send("Page.getScriptToEvaluateOnNewDocument")
+        scripts = result.get("scripts", [])
+        # Trim source to first 200 chars for readability
+        for s in scripts:
+            src = s.get("source", "")
+            if len(src) > 200:
+                s["source_preview"] = src[:200] + "..."
+            else:
+                s["source_preview"] = src
+            s.pop("source", None)
+        return scripts
 
     def _close_impl(self) -> None:
         if self.browser is not None:

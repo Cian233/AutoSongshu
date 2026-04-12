@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import threading
 from collections.abc import Callable
@@ -9,10 +10,13 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
+import time
 from typing import Any
 from uuid import uuid4
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from ..agent import PentestConversationSession
 from ..authorization_store import AuthorizationDraft, AuthorizationStore
@@ -225,6 +229,15 @@ class ChatSessionManager:
             if message.id == message_id:
                 return message
         raise KeyError(message_id)
+
+    def _find_latest_assistant_message(
+        self, session: ChatSessionState
+    ) -> ChatMessage | None:
+        """Return the most recent assistant message, or None."""
+        for message in reversed(session.messages):
+            if message.role == "assistant":
+                return message
+        return None
 
     def _history_message_to_agent_msg(self, message: ChatMessage) -> Any:
         role = "assistant" if message.role == "assistant" else "user"
@@ -475,7 +488,11 @@ class ChatSessionManager:
         session: ChatSessionState,
         anchor_message_id: str,
         updated_memory: LayeredConversationMemory,
-    ) -> None:
+    ) -> list[str]:
+        """Physically compact messages up to and including *anchor_message_id*.
+
+        Returns the list of message IDs that were removed.
+        """
         anchor_idx = -1
         for i, msg in enumerate(session.messages):
             if msg.id == anchor_message_id:
@@ -483,7 +500,7 @@ class ChatSessionManager:
                 break
 
         if anchor_idx == -1:
-            return
+            return []
 
         messages_to_delete = [m.id for m in session.messages[: anchor_idx + 1]]
 
@@ -495,6 +512,19 @@ class ChatSessionManager:
             suppress_follow_up_questions=True,
             recent_messages_preserved=True,
         )
+
+        # Safety check: skip physical compaction if the summary is empty or
+        # too short to preserve meaningful context.  Falling back to keeping
+        # all messages is safer than permanently deleting them.
+        MIN_SUMMARY_CHARS = 50
+        if not continuation_text or len(continuation_text.strip()) < MIN_SUMMARY_CHARS:
+            logger.warning(
+                "Skipping physical compaction for session %s: "
+                "summary is too short (%d chars) to preserve context.",
+                session.session_id,
+                len(continuation_text.strip()) if continuation_text else 0,
+            )
+            return []
 
         system_message = ChatMessage(
             id=uuid4().hex,
@@ -517,9 +547,24 @@ class ChatSessionManager:
         # Delete old messages from store
         self.session_store.delete_messages(session.session_id, messages_to_delete)
 
+        return messages_to_delete
+
     def _run_post_turn_memory_refresh(self, job: _MemoryRefreshJob) -> None:
-        with contextlib.suppress(Exception):
+        try:
             updated_memory = self._execute_memory_refresh_job(job)
+        except Exception as exc:
+            logger.error(
+                "Memory refresh failed for session %s: %s",
+                job.session_id, exc, exc_info=True,
+            )
+            with self.lock:
+                session = self.chat_sessions.get(job.session_id)
+                if session is not None and session.memory_refresh_revision == job.revision:
+                    session.cleanup_future = None
+                    session.is_compacting = False
+            return
+
+        try:
             with self.lock:
                 session = self.chat_sessions.get(job.session_id)
                 if session is None:
@@ -529,18 +574,36 @@ class ChatSessionManager:
                 session.memory = updated_memory
                 session.is_compacting = False
 
-                self._apply_physical_compaction(
+                deleted_ids = self._apply_physical_compaction(
                     session, job.anchor_message_id, updated_memory
                 )
                 self._persist_session_state(session)
+
+            # Notify frontend about compaction results
             self._emit_session(session)
-        with self.lock:
-            session = self.chat_sessions.get(job.session_id)
-            if session is None:
-                return
-            if session.memory_refresh_revision == job.revision:
-                session.cleanup_future = None
-                session.is_compacting = False
+
+            # Push the new system summary message so the frontend can display it
+            if session.messages:
+                self._emit_message(session.session_id, session.messages[0])
+
+            # Push compacted event so the frontend removes stale messages
+            if deleted_ids:
+                self._emit(
+                    "message.compacted",
+                    session_id=session.session_id,
+                    deleted_message_ids=deleted_ids,
+                )
+        except Exception as exc:
+            logger.error(
+                "Post-turn compaction failed for session %s: %s",
+                job.session_id, exc, exc_info=True,
+            )
+        finally:
+            with self.lock:
+                session = self.chat_sessions.get(job.session_id)
+                if session is not None and session.memory_refresh_revision == job.revision:
+                    session.cleanup_future = None
+                    session.is_compacting = False
 
     def _wait_for_pending_cleanup(self, session_id: str) -> None:
         cleanup_future: Future[Any] | None = None
@@ -695,6 +758,37 @@ class ChatSessionManager:
     def _emit_message(self, session_id: str, message: ChatMessage) -> None:
         self._emit("message.upsert", session_id=session_id, message=message.to_dict())
 
+    def _emit_findings_update(self, session_id: str) -> None:
+        """Push current findings list via SSE if available."""
+        try:
+            session = self.chat_sessions.get(session_id)
+            if session is None or session.conversation is None:
+                return
+            runtime = getattr(session.conversation, "runtime", None)
+            if runtime is None:
+                return
+            store = getattr(runtime, "findings", None)
+            if store is None:
+                return
+            findings = [f.model_dump() for f in store.list()]
+            self._emit("finding.upsert", session_id=session_id, findings=findings)
+        except Exception as e:
+            logger.warning("Failed to emit findings update: %s", e)
+
+    def _emit_progress_update(self, session_id: str, step_info: dict) -> None:
+        """Push a progress update via SSE."""
+        try:
+            self._emit("progress.update", session_id=session_id, progress=step_info)
+        except Exception as e:
+            logger.warning("Failed to emit progress update: %s", e)
+
+    def _emit_step_update(self, session_id: str, step: dict) -> None:
+        """Push a step update via SSE."""
+        try:
+            self._emit("step.upsert", session_id=session_id, step=step)
+        except Exception as e:
+            logger.warning("Failed to emit step update: %s", e)
+
     def add_listener(self, listener: Callable[[dict[str, Any]], None]) -> str:
         listener_id = uuid4().hex
         with self.lock:
@@ -735,6 +829,18 @@ class ChatSessionManager:
             session.updated_at = now_iso()
             session.interrupt_requested = True
             conversation = session.conversation
+
+            # Flush any in-progress assistant message content so it is
+            # not lost when the agent loop stops.
+            assistant_msg = self._find_latest_assistant_message(session)
+            if assistant_msg is not None and assistant_msg.status == "in_progress":
+                assistant_msg.content = finalize_completed_assistant_content(
+                    assistant_msg.content
+                )
+                assistant_msg.status = "interrupted"
+                assistant_msg.updated_at = now_iso()
+                self._persist_message(session_id, assistant_msg)
+
             self._persist_session_state(session)
             detail = session.detail_dict()
 
@@ -742,6 +848,79 @@ class ChatSessionManager:
             conversation.interrupt()
 
         self._emit_session(session)
+        # Emit the flushed assistant message so the frontend displays it
+        if assistant_msg is not None:
+            self._emit_message(session_id, assistant_msg)
+        return detail
+
+    def fork_session(
+        self, session_id: str, message_index: int = -1
+    ) -> dict[str, Any]:
+        """Fork a chat session up to the specified message index.
+
+        Args:
+            session_id: The source session to fork from.
+            message_index: The index (0-based) of the last message to include
+                in the forked session.  Defaults to -1 (all messages).
+
+        Returns:
+            The detail dict of the newly created session.
+        """
+        with self.lock:
+            source = self.chat_sessions.get(session_id)
+            if source is None:
+                raise KeyError(session_id)
+
+            messages = list(source.messages)
+            total = len(messages)
+            if message_index < 0:
+                message_index = total - 1
+            elif message_index >= total:
+                message_index = total - 1
+
+            # Only include messages up to message_index (inclusive)
+            forked_messages = messages[: message_index + 1]
+
+            new_session = ChatSessionState(
+                session_id=self._next_session_id(),
+                title=f"{source.title} (分叉)",
+                config_path=source.config_path,
+                engagement_name=source.engagement_name,
+                authorization=source.authorization,
+                start_url=source.start_url,
+                allowed_hosts=list(source.allowed_hosts),
+                allow_subdomains=source.allow_subdomains,
+                engagement_notes=source.engagement_notes,
+                skill_dirs=list(source.skill_dirs),
+                knowledge_base_ids=list(source.knowledge_base_ids),
+                mode=source.mode,
+                status="idle",
+                memory=source.memory.model_copy(deep=True),
+                messages=[
+                    ChatMessage(
+                        id=m.id,
+                        role=m.role,
+                        content=[dict(part) for part in m.content],
+                        status=m.status,
+                        created_at=m.created_at,
+                        updated_at=m.updated_at,
+                        error=m.error,
+                        order_index=m.order_index,
+                        compacted=m.compacted,
+                        token_count=m.token_count,
+                    )
+                    for m in forked_messages
+                ],
+            )
+
+            self.chat_sessions[new_session.session_id] = new_session
+            self._persist_session_state(new_session)
+            for msg in new_session.messages:
+                self._persist_message(new_session.session_id, msg)
+
+            detail = new_session.detail_dict()
+
+        self._emit_session(new_session)
         return detail
 
     def list_authorizations(self) -> list[dict[str, str | bool | list[str] | None]]:
@@ -1150,6 +1329,8 @@ class ChatSessionManager:
             session = self.chat_sessions.get(session_id)
             if session is None:
                 raise KeyError(session_id)
+            if session.is_compacting:
+                raise RuntimeError("当前会话正在压缩记忆，请稍后再试。")
             if session.future is not None and not session.future.done():
                 raise RuntimeError("当前会话仍在处理中，请等待上一条消息完成。")
 
@@ -1194,14 +1375,24 @@ class ChatSessionManager:
                     session.conversation, "cost_tracker"
                 ):
                     tracker = session.conversation.cost_tracker
-                    summary = tracker.summary_dict()
-                    usage_text = (
-                        f"**Token 消耗统计**\n"
-                        f"- Input Tokens: {summary['input_tokens']}\n"
-                        f"- Output Tokens: {summary['output_tokens']}\n"
-                        f"- Total Tokens: {summary['total_tokens']}\n"
-                        f"- Events: {summary['event_count']}"
-                    )
+                    model_name = session._get_model_name()
+                    summary = tracker.summary_dict(model_name=model_name)
+                    lines = [
+                        "**Token 消耗统计**",
+                        f"- Input Tokens: {summary['input_tokens']}",
+                        f"- Output Tokens: {summary['output_tokens']}",
+                        f"- Total Tokens: {summary['total_tokens']}",
+                        f"- Events: {summary['event_count']}",
+                    ]
+                    if summary.get("estimated_cost_usd") is not None:
+                        lines.append(f"- Estimated Cost: ${summary['estimated_cost_usd']:.4f}")
+                    if summary.get("cache_hit_ratio") is not None:
+                        lines.append(f"- Cache Hit Rate: {summary['cache_hit_ratio'] * 100:.1f}%")
+                    if summary.get("cache_read_input_tokens"):
+                        lines.append(f"- Cache Read Tokens: {summary['cache_read_input_tokens']}")
+                    if summary.get("cache_creation_input_tokens"):
+                        lines.append(f"- Cache Creation Tokens: {summary['cache_creation_input_tokens']}")
+                    usage_text = "\n".join(lines)
                 assistant_message.content = [
                     {"type": "output_text", "text": usage_text}
                 ]
@@ -1286,7 +1477,7 @@ class ChatSessionManager:
                 session.memory = updated_memory
                 session.memory_refresh_revision = job.revision
 
-                self._apply_physical_compaction(
+                deleted_ids = self._apply_physical_compaction(
                     session, job.anchor_message_id, updated_memory
                 )
 
@@ -1304,6 +1495,18 @@ class ChatSessionManager:
 
             self._emit_session(session)
             self._emit_message(session_id, assistant_message)
+
+            # Push the new system summary message
+            if session.messages:
+                self._emit_message(session_id, session.messages[0])
+
+            # Push compacted event so the frontend removes stale messages
+            if deleted_ids:
+                self._emit(
+                    "message.compacted",
+                    session_id=session_id,
+                    deleted_message_ids=deleted_ids,
+                )
         except Exception as exc:
             with self.lock:
                 session = self.chat_sessions.get(session_id)
@@ -1415,6 +1618,8 @@ class ChatSessionManager:
             self._emit("session.upsert", session=session_payload)
             self._emit("message.upsert", session_id=session_id, message=message_payload)
 
+        seen_tool_call_ids: set[str] = set()
+
         def on_stream_event(event: dict[str, Any]) -> None:
             incoming = assistant_content_from_blocks(
                 list(event.get("blocks") or []),
@@ -1437,6 +1642,81 @@ class ChatSessionManager:
                 session.error = None
                 session.updated_at = assistant_message.updated_at
             flush_partial(force=should_force_stream_flush(event))
+
+            # Record trajectory steps for tool_result blocks
+            try:
+                blocks = list(event.get("blocks") or [])
+                for block in blocks:
+                    if str(block.get("type") or "").strip().lower() != "tool_result":
+                        continue
+                    tool_call_id = str(block.get("tool_call_id") or "")
+                    if not tool_call_id or tool_call_id in seen_tool_call_ids:
+                        continue
+                    seen_tool_call_ids.add(tool_call_id)
+                    tool_name = str(block.get("name") or "").strip()
+                    result_content = block.get("content") or []
+                    if isinstance(result_content, list):
+                        result_text = " ".join(
+                            str(item.get("text") or "")
+                            for item in result_content
+                            if str(item.get("type") or "").strip().lower()
+                            in {"text", "output_text"}
+                        )
+                    else:
+                        result_text = str(result_content or "")[:500]
+
+                    with self.lock:
+                        session = self.chat_sessions.get(session_id)
+                        if session is None or session.conversation is None:
+                            continue
+                        recorder = getattr(
+                            session.conversation, "trajectory_recorder", None
+                        )
+                        if recorder is None:
+                            continue
+
+                    from ..agent.step_model import AgentStep, StepState
+
+                    step = AgentStep(
+                        index=len(recorder.steps),
+                        state=StepState.SUCCEEDED,
+                        action=f"tool_call:{tool_name}",
+                        observation=result_text[:500],
+                        tool_name=tool_name,
+                        tool_arguments={"tool_call_id": tool_call_id}
+                        if tool_call_id
+                        else {},
+                        token_usage={},
+                        timestamp=time.time(),
+                        duration_ms=0,
+                        metadata={"tool_call_id": tool_call_id},
+                    )
+                    recorder.record_step(step)
+                    self._emit_step_update(session_id, step.to_dict())
+            except Exception as e:
+                logger.warning("Failed to record step: %s", e)
+
+            # Detect update_progress and record_finding tool calls for real-time push
+            for block in blocks:
+                if str(block.get("type") or "").strip().lower() not in ("tool_call", "tool_use"):
+                    continue
+                tool_name = str(block.get("name") or "")
+                if tool_name == "update_progress":
+                    try:
+                        args = block.get("arguments") or {}
+                        if isinstance(args, str):
+                            args = json.loads(args)
+                        self._emit_progress_update(session_id, {
+                            "current_step": args.get("current_step", ""),
+                            "total_steps": args.get("total_steps"),
+                            "status": args.get("status", "in_progress"),
+                            "detail": args.get("detail", ""),
+                        })
+                    except Exception as e:
+                        logger.warning("Failed to emit progress for update_progress: %s", e)
+                elif tool_name == "record_finding":
+                    # Immediately push findings update when record_finding is called
+                    self._emit_findings_update(session_id)
 
         try:
             with self.lock:
@@ -1505,6 +1785,7 @@ class ChatSessionManager:
 
             self._emit_session(session)
             self._emit_message(session_id, assistant_message)
+            self._emit_findings_update(session_id)
         except Exception as exc:
             with self.lock:
                 session = self.chat_sessions.get(session_id)
@@ -1518,11 +1799,15 @@ class ChatSessionManager:
                 assistant_message.content = finalize_completed_assistant_content(
                     assistant_message.content
                 )
-                assistant_message.status = "failed"
-                assistant_message.error = str(exc)
+                # If the session was interrupted, keep the "interrupted"
+                # status that was already set in interrupt_session()
+                # instead of overwriting it with "failed".
+                was_interrupted = session.interrupt_requested or session.status == "interrupting"
+                assistant_message.status = "interrupted" if was_interrupted else "failed"
+                assistant_message.error = str(exc) if not was_interrupted else None
                 assistant_message.updated_at = now_iso()
-                session.status = "error"
-                session.error = str(exc)
+                session.status = "idle" if was_interrupted else "error"
+                session.error = None if was_interrupted else str(exc)
                 session.interrupt_requested = False
                 session.future = None
                 session.is_compacting = False
@@ -1532,6 +1817,7 @@ class ChatSessionManager:
 
             self._emit_session(session)
             self._emit_message(session_id, assistant_message)
+            self._emit_findings_update(session_id)
 
     def shutdown(self) -> None:
         with self.lock:

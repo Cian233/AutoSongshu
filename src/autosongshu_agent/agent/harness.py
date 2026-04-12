@@ -84,10 +84,22 @@ class BaseAgentHarness(_AgentBuilderMixin):
                 completion_tokens = (
                     usage.get("completion_tokens") or usage.get("output_tokens") or 0
                 )
+                cache_creation = (
+                    usage.get("cache_creation_input_tokens")
+                    or usage.get("cached_tokens")
+                    or 0
+                )
+                cache_read = (
+                    usage.get("cache_read_input_tokens")
+                    or usage.get("prompt_tokens_details", {}).get("cached_tokens")
+                    or 0
+                )
                 self.cost_tracker.add_usage(
                     input_tokens=int(prompt_tokens),
                     output_tokens=int(completion_tokens),
                     label="agent_turn",
+                    cache_creation_input_tokens=int(cache_creation),
+                    cache_read_input_tokens=int(cache_read),
                 )
 
         if use_loop_guard:

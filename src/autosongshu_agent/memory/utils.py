@@ -337,6 +337,57 @@ def _accomplished_hints_from_transcript(
     return [f"Recently executed or inspected via tools: {', '.join(unique_names[:8])}"]
 
 
+def _clean_stale_handoff_items(
+    handoff: SessionHandoffCard,
+    current_pending_work: list[str] | None = None,
+) -> SessionHandoffCard:
+    """Remove stale items from a handoff card to prevent unbounded growth.
+
+    Items are considered stale if they appear in ``pending_work`` (meaning
+    they have been completed) or if the list exceeds a reasonable cap.
+    Returns a *new* ``SessionHandoffCard`` instance.
+    """
+    current_pending_set: set[str] = set()
+    if current_pending_work:
+        for item in current_pending_work:
+            current_pending_set.add(item.strip()[:80].lower())
+
+    cleaned = deepcopy(handoff)
+
+    # Remove completed pending work items
+    if cleaned.pending_work and current_pending_set:
+        cleaned.pending_work = [
+            item
+            for item in cleaned.pending_work
+            if item.strip()[:80].lower() not in current_pending_set
+        ]
+
+    # Cap list sizes to prevent unbounded growth
+    _CAP = 15
+    for field_name in (
+        "pending_work",
+        "discoveries",
+        "accomplished",
+        "confirmed_facts",
+        "open_questions",
+        "avoid_repeating",
+        "instructions",
+        "recent_requests",
+    ):
+        current_list = getattr(cleaned, field_name, None)
+        if isinstance(current_list, list) and len(current_list) > _CAP:
+            setattr(cleaned, field_name, current_list[-_CAP:])
+
+    # Cap file/url lists (smaller limit)
+    _FILE_CAP = 12
+    for field_name in ("relevant_files", "target_urls"):
+        current_list = getattr(cleaned, field_name, None)
+        if isinstance(current_list, list) and len(current_list) > _FILE_CAP:
+            setattr(cleaned, field_name, current_list[-_FILE_CAP:])
+
+    return cleaned
+
+
 def _build_handoff_card(
     existing_handoff: SessionHandoffCard,
     *,
@@ -497,8 +548,13 @@ def build_memory_fallback(
     recent_requests = _instruction_hints_from_transcript(transcript_payload, limit=3)
     pending_work = infer_pending_work(transcript_payload, limit=3)
 
+    # ── Handoff Card Hygiene ──────────────────────────────────────
+    # Remove stale items from the existing handoff card to prevent
+    # unbounded growth across multiple compaction cycles.
+    cleaned_handoff = _clean_stale_handoff_items(existing_memory.handoff, pending_work)
+
     updated.handoff = _build_handoff_card(
-        existing_memory.handoff,
+        cleaned_handoff,
         task=original_task or updated.summary,
         status=updated.summary,
         current_focus=latest_user_text

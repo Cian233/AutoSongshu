@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .models import LayeredConversationMemory, MemoryNote, SessionHandoffCard
+from .compaction import select_messages_for_compaction, CompactionStrategy
 
 
 @dataclass
@@ -323,7 +324,9 @@ class TokenBudgetTracker:
             return 0
         if self._encoder is not None:
             return len(self._encoder.encode(text))
-        return len(text.split()) + len(text) // 4
+        # Fallback: ~2.5 chars per token is a reasonable middle ground
+        # between CJK (~1.5 chars/token) and Latin (~4 chars/token).
+        return max(1, int(len(text) / 2.5))
 
     def count_messages_tokens(self, messages: list[dict[str, Any]]) -> int:
         total = 0
@@ -336,7 +339,7 @@ class TokenBudgetTracker:
                     if isinstance(part, dict):
                         text = part.get("text", "")
                         total += self.count_tokens(text)
-            total += 4
+            total += 6  # overhead for role, name, delimiters
         return total
 
     def available_budget(self, used_tokens: int) -> int:
@@ -362,6 +365,7 @@ class ContextWindowConfig:
     keep_first_turns: int = 1
     keep_last_turns: int = 4
     summarization_threshold_tokens: int = 100000
+    compaction_strategy: CompactionStrategy = CompactionStrategy.HYBRID
 
 
 @dataclass
@@ -471,6 +475,157 @@ class ContextWindowManager:
             summary=f"Marked {removed} messages as compacted. Users can still view them.",
             compacted_range=last_range,
         )
+
+    def compact_with_importance(
+        self,
+        *,
+        model_client: Any | None = None,
+        importance_threshold: float = 0.6,
+    ) -> CompactionResult | None:
+        """Compact messages using importance-based selection.
+
+        Unlike :meth:`compact_if_needed` which uses simple positional
+        heuristics, this method scores each message by content value
+        (findings, tool calls, recency) and only compacts low-importance
+        messages.  When the configured strategy is ``HYBRID`` or
+        ``LLM_DRIVEN``, an LLM client can be supplied to produce a
+        semantic summary of the compacted messages.
+
+        Args:
+            model_client: Optional LLM client for semantic summarization.
+            importance_threshold: Messages scoring below this are compacted.
+
+        Returns:
+            A :class:`CompactionResult` if compaction was performed, else
+            ``None``.
+        """
+        if not self.should_compact():
+            return None
+
+        active = self.transcript.active_entries()
+        if len(active) <= self.config.keep_first_turns + self.config.keep_last_turns:
+            return None
+
+        # Build lightweight dicts for importance scoring
+        active_msgs: list[dict[str, Any]] = []
+        turn_counter = 0
+        for i, entry in enumerate(active):
+            if entry.role == "user":
+                turn_counter += 1
+            active_msgs.append({
+                "index": i,
+                "role": entry.role,
+                "content": entry.content,
+                "turn_number": turn_counter,
+            })
+
+        keep_msgs, compact_msgs = select_messages_for_compaction(
+            active_msgs,
+            keep_count=self.config.keep_last_turns + self.config.keep_first_turns,
+            importance_threshold=importance_threshold,
+        )
+
+        if not compact_msgs:
+            return None
+
+        # Mark compacted entries in the transcript store
+        compact_indices = {m["index"] for m in compact_msgs}
+        entries_to_compact = [active[idx] for idx in sorted(compact_indices) if idx < len(active)]
+
+        if not entries_to_compact:
+            return None
+
+        tokens_compacted = sum(e.token_count for e in entries_to_compact)
+        turns_compacted = sum(1 for e in entries_to_compact if e.role == "user")
+
+        for entry in entries_to_compact:
+            entry.compacted = True
+
+        # Build semantic summary when LLM is available and strategy allows it
+        summary_text = ""
+        if model_client is not None and self.config.compaction_strategy in (
+            CompactionStrategy.LLM_DRIVEN,
+            CompactionStrategy.HYBRID,
+        ):
+            try:
+                # Import here to avoid circular imports at module level
+                from .compaction import build_semantic_compact_summary
+
+                compact_dicts = [
+                    {"role": e.role, "content": e.content}
+                    for e in entries_to_compact
+                ]
+                summary_text = self._run_sync(
+                    build_semantic_compact_summary(
+                        compact_dicts,
+                        model_client=model_client,
+                    )
+                )
+            except Exception:
+                summary_text = ""
+
+        start_idx = (
+            self.transcript.entries.index(entries_to_compact[0])
+            if entries_to_compact
+            else 0
+        )
+        end_idx = (
+            self.transcript.entries.index(entries_to_compact[-1]) + 1
+            if entries_to_compact
+            else 0
+        )
+
+        range_summary = summary_text or (
+            f"Compacted {len(entries_to_compact)} messages "
+            f"({turns_compacted} turns, ~{tokens_compacted} tokens) "
+            f"via importance scoring"
+        )
+
+        self.transcript.compacted_ranges.append(
+            CompactedRange(
+                start_index=start_idx,
+                end_index=end_idx,
+                token_count=tokens_compacted,
+                turn_count=turns_compacted,
+                summary=range_summary,
+            )
+        )
+
+        self.transcript.total_tokens_compacted += tokens_compacted
+        self.compaction_count += 1
+        self._last_compaction_turn = self.transcript.active_turn_count()
+
+        last_range = self.transcript.compacted_ranges[-1] if self.transcript.compacted_ranges else None
+
+        return CompactionResult(
+            entries_marked_compacted=len(entries_to_compact),
+            tokens_saved=self.transcript.total_tokens_compacted,
+            summary=f"Importance-based compaction: {len(entries_to_compact)} messages marked.",
+            compacted_range=last_range,
+        )
+
+    @staticmethod
+    def _run_sync(coro: Any) -> str:
+        """Helper to run an async coroutine from sync context.
+
+        If an event loop is already running, create a new thread with its
+        own loop.  Otherwise, use ``asyncio.run``.
+        """
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, coro)
+                return future.result()
+        else:
+            return asyncio.run(coro)
 
     def get_context_for_model(
         self,

@@ -24,6 +24,7 @@ def _http_request_invalidates_cache(arguments: dict[str, Any]) -> bool:
     "http-analysis",
     dedupe=_http_request_allows_dedupe,
     invalidates_cache=_http_request_invalidates_cache,
+    max_retries=2,
 )
 def http_request(
     runtime: PentestRuntime,
@@ -56,6 +57,38 @@ def analyze_security_headers(runtime: PentestRuntime, url: str) -> ToolResponse:
     """Inspect common response security headers and obvious cookie-flag gaps."""
     try:
         return _tool_response(runtime.http.analyze_security_headers(url))
+    except Exception as exc:
+        return _error_response(exc)
+
+@registry.register(
+    "http-analysis",
+    dedupe=_http_request_allows_dedupe,
+    invalidates_cache=_http_request_invalidates_cache,
+    max_retries=2,
+)
+def http_raw_request(
+    runtime: PentestRuntime,
+    method: str,
+    url: str,
+    params_json: str = "{}",
+    headers_json: str = "{}",
+    raw_body: str = "",
+    content_type: str = "application/octet-stream",
+    follow_redirects: bool = False,
+) -> ToolResponse:
+    """Send an HTTP request with a raw string body (no JSON serialization). Use this when you need exact byte-level control over the request body, e.g. to prevent double-encoding of percent-encoded characters like %0A, or to send crafted payloads for WAF testing, CRLF injection, etc. The raw_body is transmitted exactly as provided."""
+    try:
+        return _tool_response(
+            runtime.http.raw_request(
+                method=method,
+                url=url,
+                params=_parse_json_object(params_json) or None,
+                headers={str(k): str(v) for k, v in _parse_json_object(headers_json).items()} or None,
+                raw_body=raw_body or None,
+                content_type=content_type,
+                follow_redirects=follow_redirects,
+            ),
+        )
     except Exception as exc:
         return _error_response(exc)
 

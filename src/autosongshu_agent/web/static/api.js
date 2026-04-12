@@ -1,6 +1,8 @@
 import {
   byId,
   fetchJson,
+  getApiToken,
+  messageText,
   normalizeSessionDetail,
   normalizeLines,
   state,
@@ -19,6 +21,33 @@ import {
   setSelectedKnowledgeBaseIds,
   setAuthorizationFeedback,
 } from "./render.js";
+
+// ── API Endpoints ─────────────────────────────────────────────────
+const API = {
+  HEALTH: "/api/health",
+  BOOTSTRAP: "/api/bootstrap",
+  SESSIONS: "/api/chat/sessions",
+  COMMANDS: "/api/commands",
+  EVENTS: "/api/chat/events",
+  AUTHORIZATIONS: "/api/authorizations",
+  KNOWLEDGE_BASES: "/api/knowledge/bases",
+  session: (id) => `/api/chat/sessions/${encodeURIComponent(id)}`,
+  sessionMessages: (id) => `/api/chat/sessions/${encodeURIComponent(id)}/messages`,
+  sessionInterrupt: (id) => `/api/chat/sessions/${encodeURIComponent(id)}/interrupt`,
+  sessionFork: (id) => `/api/chat/sessions/${encodeURIComponent(id)}/fork`,
+  sessionKnowledge: (id) => `/api/chat/sessions/${encodeURIComponent(id)}/knowledge-documents`,
+  sessionTrajectory: (id) => `/api/chat/sessions/${encodeURIComponent(id)}/trajectory`,
+  sessionMemoryStatus: (id) => `/api/chat/sessions/${encodeURIComponent(id)}/memory-status`,
+  sessionFindings: (id) => `/api/chat/sessions/${encodeURIComponent(id)}/findings`,
+  approvalRespond: (id) => `/api/chat/approvals/${encodeURIComponent(id)}/respond`,
+  approvalCancel: (id) => `/api/chat/approvals/${encodeURIComponent(id)}/cancel`,
+  knowledgeBase: (id) => `/api/knowledge/bases/${encodeURIComponent(id)}`,
+  knowledgeDocuments: (id) => `/api/knowledge/bases/${encodeURIComponent(id)}/documents`,
+  knowledgeDocumentUpload: (id) => `/api/knowledge/bases/${encodeURIComponent(id)}/documents/upload`,
+  knowledgeDocument: (baseId, docId) => `/api/knowledge/bases/${encodeURIComponent(baseId)}/documents/${encodeURIComponent(docId)}`,
+  CONFIG: "/api/chat/config",
+  CONFIG_RELOAD: "/api/chat/config/reload",
+};
 
 const bootstrapDefaults = window.__AUTOSONGSHU_BOOTSTRAP__ || {};
 const API_RECOVERY_TIMEOUT_MS = 15000;
@@ -64,6 +93,10 @@ function showApprovalModal(request) {
   if (rememberCheckbox) {
     rememberCheckbox.checked = false;
   }
+  const alwaysAllowCheckbox = byId("approval-always-allow");
+  if (alwaysAllowCheckbox) {
+    alwaysAllowCheckbox.checked = false;
+  }
   modal.hidden = false;
   document.body.classList.add("modal-open");
 }
@@ -83,14 +116,17 @@ async function respondToApproval(approved) {
   }
   const rememberCheckbox = byId("approval-remember-session");
   const remember_for_session = rememberCheckbox ? rememberCheckbox.checked : false;
+  const alwaysAllowCheckbox = byId("approval-always-allow");
+  const always_allow = alwaysAllowCheckbox ? alwaysAllowCheckbox.checked : false;
   try {
     await fetchJson(`/api/chat/approvals/${encodeURIComponent(currentApprovalRequestId)}/respond`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approved, reason: "", remember_for_session }),
+      body: JSON.stringify({ approved, reason: "", remember_for_session, always_allow }),
     });
   } catch (error) {
     window.alert(`审批响应失败：${String(error.message || error)}`);
+    return;
   }
   hideApprovalModal();
 }
@@ -111,6 +147,30 @@ function setValue(id, value) {
   const node = byId(id);
   if (node) {
     node.value = value;
+  }
+}
+
+export async function getConfig(configPath) {
+  try {
+    const url = configPath ? `${API.CONFIG}?config_path=${encodeURIComponent(configPath)}` : API.CONFIG;
+    return await fetchJson(url);
+  } catch (error) {
+    window.alert(`获取配置失败：${String(error.message || error)}`);
+    return null;
+  }
+}
+
+export async function reloadConfig(configPath) {
+  try {
+    const body = configPath ? { config_path: configPath } : {};
+    return await fetchJson(API.CONFIG_RELOAD, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    window.alert(`配置热更新失败：${String(error.message || error)}`);
+    return null;
   }
 }
 
@@ -169,6 +229,30 @@ function scheduleRealtimeResync() {
   });
 }
 
+export async function loadFindings(sessionId) {
+  try {
+    const data = await fetchJson(API.sessionFindings(sessionId));
+    if (data && Array.isArray(data.findings)) {
+      state.findings = data.findings;
+      state.findingsSessionId = sessionId;
+    }
+  } catch (e) {
+    console.warn("Failed to load findings:", e);
+  }
+}
+
+export async function loadSteps(sessionId) {
+  try {
+    const data = await fetchJson(API.sessionTrajectory(sessionId));
+    if (data && Array.isArray(data.steps)) {
+      state.steps = data.steps;
+      state.stepsSessionId = sessionId;
+    }
+  } catch (e) {
+    console.warn("Failed to load steps:", e);
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -202,7 +286,7 @@ async function recoverServerConnection({ refresh = true } = {}) {
 
     while (Date.now() < deadline) {
       try {
-        await fetchJson(`/api/health?_=${Date.now()}`, { timeoutMs: 3000 });
+        await fetchJson(`${API.HEALTH}?_=${Date.now()}`, { timeoutMs: 3000 });
         connectRealtime();
         if (refresh) {
           await refreshData({ suppressRecovery: true });
@@ -373,6 +457,8 @@ export async function loadSession(sessionId, { render = true, suppressRecovery =
       setSelectedKnowledgeBaseIds(detail.knowledge_base_ids);
     }
     upsertSessionSummary(detail);
+    await loadFindings(sessionId);
+    await loadSteps(sessionId);
     if (render && String(state.selectedSessionId) === normalizedId) {
       // Use force: true to bypass the render throttle since we just loaded a new session
       scheduleRenderApp({ force: true });
@@ -393,8 +479,33 @@ export async function interruptSession(sessionId) {
       method: "POST",
     }),
   );
+  // Only update the summary-level data; do NOT overwrite state.sessionDetails
+  // with the HTTP response snapshot.  The interrupt API generates detail_dict()
+  // *before* conversation.interrupt() completes, so the snapshot contains stale
+  // message statuses (e.g. "in_progress").  The actual final state arrives
+  // asynchronously via SSE (message.upsert → status="failed"), and we must
+  // let those SSE events win the race.
+  upsertSessionSummary(detail);
+  renderApp();
+  return detail;
+}
+
+export async function forkSession(sessionId, messageIndex = -1) {
+  const detail = normalizeSessionDetail(
+    await fetchJson(API.sessionFork(sessionId), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message_index: messageIndex }),
+    }),
+  );
   state.sessionDetails.set(detail.id, detail);
   upsertSessionSummary(detail);
+  state.selectedSessionId = detail.id;
+  state.findings = [];
+  state.findingsSessionId = null;
+  state.steps = [];
+  state.stepsSessionId = null;
+  await loadSession(detail.id, { render: false });
   renderApp();
   return detail;
 }
@@ -423,7 +534,7 @@ export async function createKnowledgeDocumentFromSession(sessionId, payload = {}
 
 export async function refreshData({ suppressRecovery = false } = {}) {
   try {
-    const payload = await fetchJson("/api/chat/sessions");
+    const payload = await fetchJson(API.SESSIONS);
     state.sessions = payload.sessions || [];
     sortSessions();
 
@@ -459,7 +570,11 @@ export function connectRealtime() {
   state.connectionState = "connecting";
   renderApp();
 
-  const eventSource = new EventSource("/api/chat/events");
+  const token = getApiToken();
+  const eventsUrl = token
+    ? `${API.EVENTS}?token=${encodeURIComponent(token)}`
+    : API.EVENTS;
+  const eventSource = new EventSource(eventsUrl);
   state.eventSource = eventSource;
 
   eventSource.addEventListener("open", () => {
@@ -481,13 +596,25 @@ export function connectRealtime() {
   });
 
   eventSource.addEventListener("session.upsert", (event) => {
-    const payload = JSON.parse(event.data);
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (parseError) {
+      console.warn("Failed to parse SSE event data:", parseError);
+      return;
+    }
     upsertSessionSummary(payload.session);
     _scheduleRenderApp();
   });
 
   eventSource.addEventListener("message.upsert", (event) => {
-    const payload = JSON.parse(event.data);
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (parseError) {
+      console.warn("Failed to parse SSE event data:", parseError);
+      return;
+    }
     const sessionId = payload.session_id;
 
     const detail = state.sessionDetails.get(sessionId);
@@ -507,8 +634,99 @@ export function connectRealtime() {
     }
   });
 
+  eventSource.addEventListener("message.compacted", (event) => {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (parseError) {
+      console.warn("Failed to parse SSE event data:", parseError);
+      return;
+    }
+    const sessionId = payload.session_id;
+    const deletedIds = Array.isArray(payload.deleted_message_ids)
+      ? payload.deleted_message_ids.map((id) => String(id))
+      : [];
+
+    if (!deletedIds.length || sessionId !== state.selectedSessionId) {
+      return;
+    }
+
+    const detail = state.sessionDetails.get(sessionId);
+    if (!detail || !Array.isArray(detail.messages)) {
+      return;
+    }
+
+    const removedSet = new Set(deletedIds);
+    const filtered = detail.messages.filter((msg) => !removedSet.has(String(msg.id)));
+    state.sessionDetails.set(sessionId, { ...detail, messages: filtered });
+    _scheduleRenderApp({ force: true });
+  });
+
+  eventSource.addEventListener("finding.upsert", (event) => {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (parseError) {
+      console.warn("Failed to parse finding.upsert event:", parseError);
+      return;
+    }
+    const sessionId = payload.session_id;
+    if (sessionId !== state.selectedSessionId) return;
+    if (Array.isArray(payload.findings)) {
+      state.findings = payload.findings;
+      state.findingsSessionId = sessionId;
+      _scheduleRenderApp();
+    }
+  });
+
+  eventSource.addEventListener("step.upsert", (event) => {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (parseError) {
+      console.warn("Failed to parse step.upsert event:", parseError);
+      return;
+    }
+    const sessionId = payload.session_id;
+    if (sessionId !== state.selectedSessionId) return;
+    if (payload.step) {
+      // Avoid duplicates by checking index
+      const existing = state.steps.findIndex(s => s.index === payload.step.index);
+      if (existing >= 0) {
+        state.steps[existing] = payload.step;
+      } else {
+        state.steps.push(payload.step);
+      }
+      state.stepsSessionId = sessionId;
+      _scheduleRenderApp();
+    }
+  });
+
+  eventSource.addEventListener("progress.update", (event) => {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (parseError) {
+      console.warn("Failed to parse progress.update event:", parseError);
+      return;
+    }
+    const sessionId = payload.session_id;
+    if (sessionId !== state.selectedSessionId) return;
+    if (payload.progress) {
+      state.progress = payload.progress;
+      state.progressSessionId = sessionId;
+      _scheduleRenderApp();
+    }
+  });
+
   eventSource.addEventListener("approval.request", (event) => {
-    const payload = JSON.parse(event.data);
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (parseError) {
+      console.warn("Failed to parse SSE event data:", parseError);
+      return;
+    }
     showApprovalModal(payload);
   });
 
@@ -529,7 +747,7 @@ export function connectRealtime() {
 
 export async function bootstrap({ suppressRecovery = false } = {}) {
   try {
-    const payload = await fetchJson("/api/bootstrap");
+    const payload = await fetchJson(API.BOOTSTRAP);
     state.defaultConfigPath = payload.default_config_path || bootstrapDefaults.defaultConfigPath;
     state.defaultGoal = payload.default_goal || bootstrapDefaults.defaultGoal;
     state.defaultAuthorizationDraft =
@@ -593,7 +811,7 @@ export async function submitMessage(event) {
       );
     } else {
       detail = normalizeSessionDetail(
-        await fetchJson("/api/chat/sessions", {
+        await fetchJson(API.SESSIONS, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -611,6 +829,10 @@ export async function submitMessage(event) {
         }),
       );
       state.selectedSessionId = detail.id;
+      state.findings = [];
+      state.findingsSessionId = null;
+      state.steps = [];
+      state.stepsSessionId = null;
     }
 
     state.sessionDetails.set(detail.id, detail);
@@ -679,7 +901,7 @@ async function loadCommands() {
     return loadedCommands;
   }
   try {
-    const payload = await fetchJson("/api/commands");
+    const payload = await fetchJson(API.COMMANDS);
     loadedCommands = payload.commands || [];
     return loadedCommands;
   } catch {
@@ -705,9 +927,9 @@ function showCommandSuggestions(commands, filter) {
   container.innerHTML = filtered
     .map(
       (cmd, idx) =>
-        `<button class="command-suggestion-item${idx === 0 ? " selected" : ""}" data-command-name="${cmd.name}" type="button">
-          <span class="command-suggestion-name">${cmd.name}</span>
-          <span class="command-suggestion-desc">${cmd.description || ""}</span>
+        `<button class="command-suggestion-item${idx === 0 ? " selected" : ""}" data-command-name="${escapeHtml(cmd.name)}" type="button">
+          <span class="command-suggestion-name">${escapeHtml(cmd.name)}</span>
+          <span class="command-suggestion-desc">${escapeHtml(cmd.description || "")}</span>
         </button>`,
     )
     .join("");
@@ -812,4 +1034,93 @@ export async function wireCommandAutocomplete() {
       hideCommandSuggestions();
     }
   });
+}
+
+export async function regenerateMessage(sessionId) {
+  if (!sessionId) {
+    return;
+  }
+
+  const detail = state.sessionDetails.get(String(sessionId));
+  if (!detail || !Array.isArray(detail.messages)) {
+    return;
+  }
+
+  const activeMessages = detail.messages.filter((msg) => !msg.compacted);
+  if (!activeMessages.length) {
+    return;
+  }
+
+  // Find the last user message content
+  let lastUserContent = "";
+  for (let i = activeMessages.length - 1; i >= 0; i--) {
+    if (activeMessages[i].role === "user") {
+      lastUserContent = messageText(activeMessages[i]);
+      break;
+    }
+  }
+  if (!lastUserContent) {
+    return;
+  }
+
+  state.isSubmitting = true;
+  _scheduleRenderApp();
+
+  try {
+    const response = normalizeSessionDetail(
+      await fetchJson(`/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: lastUserContent }),
+      }),
+    );
+    state.sessionDetails.set(response.id, response);
+    upsertSessionSummary(response);
+    renderApp();
+  } catch (error) {
+    if (isTransientTransportError(error)) {
+      try {
+        await recoverServerConnection({ refresh: true });
+        return;
+      } catch (recoveryError) {
+        error = recoveryError;
+      }
+    }
+    window.alert(`重新生成失败：${String(error.message || error)}`);
+  } finally {
+    state.isSubmitting = false;
+    renderApp();
+  }
+}
+
+export async function exportSession(sessionId, format = "markdown") {
+  if (!sessionId) {
+    return;
+  }
+
+  try {
+    const url = `/api/chat/sessions/${encodeURIComponent(sessionId)}/export?format=${encodeURIComponent(format)}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Export failed: ${response.status} ${response.statusText}`);
+    }
+
+    const contentDisposition = response.headers.get("Content-Disposition") || "";
+    const filenameMatch = contentDisposition.match(/filename="?([^";\n]+)"?/);
+    const fallbackTitle = (state.sessionDetails.get(String(sessionId))?.title || "session").replace(/[^a-zA-Z0-9\u4e00-\u9fff _-]/g, "_");
+    const fallbackDate = new Date().toISOString().slice(0, 10);
+    const filename = filenameMatch ? filenameMatch[1] : `session_${fallbackTitle}_${fallbackDate}.md`;
+
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(blobUrl);
+  } catch (error) {
+    window.alert(`导出失败：${String(error.message || error)}`);
+  }
 }

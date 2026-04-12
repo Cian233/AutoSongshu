@@ -75,12 +75,11 @@ DEFAULT_TOOL_GROUPS: tuple[ToolGroupConfig, ...] = (
         risk_level="high",
     ),
     ToolGroupConfig(
-        name="skills",
+        name="skill-scripts",
         description="Skill script execution tools",
         tools=(
             "run_skill_script",
             "list_skill_scripts",
-            "read_skill_script",
         ),
         enabled_by_default=True,
         requires_approval=True,
@@ -178,9 +177,9 @@ class ToolPool:
         if group_name not in self.config.enabled_groups:
             return False
         if self.config.simple_mode:
-            if group_name in ("sandbox", "skills"):
+            if group_name in ("sandbox", "skill-scripts"):
                 return False
-        if not self.config.include_skills and group_name == "skills":
+        if not self.config.include_skills and group_name == "skill-scripts":
             return False
         if not self.config.include_sandbox and group_name == "sandbox":
             return False

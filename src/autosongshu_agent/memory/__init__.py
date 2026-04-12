@@ -22,6 +22,7 @@ from .context_window import (
     ContextWindowManager,
     CompactionResult,
 )
+from .orchestrator import OrchestratorConfig, ContextSnapshot, ContextOrchestrator
 
 __all__ = [
     "LayeredConversationMemory",
@@ -40,4 +41,7 @@ __all__ = [
     "ContextWindowConfig",
     "ContextWindowManager",
     "CompactionResult",
+    "OrchestratorConfig",
+    "ContextSnapshot",
+    "ContextOrchestrator",
 ]

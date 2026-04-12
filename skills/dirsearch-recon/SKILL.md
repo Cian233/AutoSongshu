@@ -2,9 +2,12 @@
 name: dirsearch-recon
 description: Scoped web content discovery with the bundled dirsearch source tree. Use when the operator explicitly asks for dirsearch, directory enumeration, hidden file discovery, content brute forcing, or low-risk path discovery on authorized HTTP or HTTPS targets.
 activation: auto
+version: "1.0"
+tags: [recon, web, directory-enumeration]
 requires_tools:
   - list_skill_scripts
   - run_skill_script
+when_to_use: "When the operator asks for directory enumeration, hidden file discovery, path brute forcing, or dirsearch-related tasks."
 ---
 
 # Dirsearch Recon

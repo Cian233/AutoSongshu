@@ -43,6 +43,7 @@ class ApprovalResponse:
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
     remember_for_session: bool = False
+    always_allow: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +52,7 @@ class ApprovalResponse:
             "reason": self.reason,
             "responded_at": self.responded_at,
             "remember_for_session": self.remember_for_session,
+            "always_allow": self.always_allow,
         }
 
 
@@ -74,9 +76,11 @@ class InteractiveApprovalManager:
         self,
         emit_callback: Callable[[str, dict[str, Any]], None] | None = None,
         default_timeout: int = 300,
+        policy: Any | None = None,
     ) -> None:
         self.emit_callback = emit_callback
         self.default_timeout = default_timeout
+        self.policy = policy  # PermissionPolicy instance for always_allow rules
         self._pending: dict[str, PendingApproval] = {}
         self._lock = threading.RLock()
         self._session_decisions: dict[str, dict[str, bool]] = {}
@@ -120,23 +124,28 @@ class InteractiveApprovalManager:
         timeout_seconds = timeout or self.default_timeout
         completed = pending.event.wait(timeout=timeout_seconds)
 
-        with self._lock:
-            self._pending.pop(request_id, None)
-
         if not completed:
+            with self._lock:
+                self._pending.pop(request_id, None)
             self._record_history(request, None, "timeout")
             raise ApprovalTimeoutError(f"Approval request {request_id} timed out")
 
         if pending.response is None:
+            with self._lock:
+                self._pending.pop(request_id, None)
             self._record_history(request, None, "cancelled")
             raise ApprovalCancelledError(f"Approval request {request_id} was cancelled")
 
         self._record_history(request, pending.response, "responded")
 
-        if pending.response.remember_for_session:
-            if session_id not in self._session_decisions:
-                self._session_decisions[session_id] = {}
-            self._session_decisions[session_id][tool_name] = pending.response.approved
+        with self._lock:
+            self._pending.pop(request_id, None)
+            # Persist "remember for session" decision while still under the
+            # lock so that concurrent request_approval calls see it immediately.
+            if pending.response.remember_for_session:
+                if session_id not in self._session_decisions:
+                    self._session_decisions[session_id] = {}
+                self._session_decisions[session_id][tool_name] = pending.response.approved
 
         return pending.response
 
@@ -146,6 +155,7 @@ class InteractiveApprovalManager:
         approved: bool,
         reason: str = "",
         remember_for_session: bool = False,
+        always_allow: bool = False,
     ) -> bool:
         with self._lock:
             pending = self._pending.get(request_id)
@@ -157,12 +167,18 @@ class InteractiveApprovalManager:
                 approved=approved,
                 reason=reason,
                 remember_for_session=remember_for_session,
+                always_allow=always_allow,
             )
             pending.request.status = "approved" if approved else "denied"
             pending.event.set()
 
         if self.emit_callback:
             self.emit_callback("approval.response", pending.response.to_dict())
+
+        # If always_allow and approved, add a persistent allow rule
+        if approved and always_allow and self.policy is not None:
+            tool_name = pending.request.tool_name
+            self.policy.add_allow_rule(tool_name)
 
         return True
 

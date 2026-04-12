@@ -1348,7 +1348,6 @@ function knowledgeBaseChipMarkup() {
     })
     .join("");
 }
-
 function knowledgeBaseListMarkup() {
   if (!state.knowledgeBases.length) {
     return `<div class="empty-state compact">Create your first knowledge base.</div>`;
@@ -1699,6 +1698,7 @@ export function renderHeader() {
   const session = selectedSession();
   const pauseButton = byId("pause-button");
   const distillButton = byId("distill-knowledge-button");
+  const exportButton = byId("export-session-button");
   const statusPill = byId("submit-status");
   const title = byId("chat-title");
   const kicker = byId("chat-kicker");
@@ -1726,6 +1726,10 @@ export function renderHeader() {
       distillButton.textContent = "沉淀";
       distillButton.setAttribute("aria-label", "沉淀");
       distillButton.setAttribute("title", "沉淀");
+    }
+    if (exportButton) {
+      exportButton.hidden = true;
+      exportButton.disabled = true;
     }
     setNodeText(statusPill, state.isSubmitting ? "发送中" : "就绪");
     statusPill.className = `status-pill ${state.isSubmitting ? "status-running" : "status-idle"}`;
@@ -1757,6 +1761,12 @@ export function renderHeader() {
     distillButton.textContent = distilling ? "沉淀中..." : "沉淀";
     distillButton.setAttribute("aria-label", distilling ? "正在沉淀" : "沉淀");
     distillButton.setAttribute("title", distilling ? "正在沉淀" : "沉淀");
+  }
+  if (exportButton) {
+    exportButton.hidden = false;
+    exportButton.disabled = false;
+    exportButton.setAttribute("aria-label", "导出会话为 Markdown");
+    exportButton.setAttribute("title", "导出会话为 Markdown");
   }
   const statusLabel = state.isSubmitting
     ? "发送中"
@@ -1832,7 +1842,7 @@ function messageRenderSignature(message) {
   );
 }
 
-function renderMessageMarkup(message) {
+function renderMessageMarkup(message, { isLastAssistant = false } = {}) {
   const role = message.role === "user" ? "user" : "assistant";
   const text = messageText(message);
   const isPending = message.status === "in_progress";
@@ -1845,6 +1855,8 @@ function renderMessageMarkup(message) {
       : text;
 
   const compactedClass = isCompacted ? "message-compacted" : "";
+  const messageId = message.id || "";
+  const messageIndex = message.order_index !== undefined ? message.order_index - 1 : -1;
 
   return {
     className: `message ${escapeHtml(role)} ${isFailed ? "message-failed" : ""} ${compactedClass}`.trim(),
@@ -1853,6 +1865,8 @@ function renderMessageMarkup(message) {
         <span class="message-label">${role === "user" ? "用户" : "助手"}</span>
         <span class="message-time">${escapeHtml(formatDate(message.updated_at || message.created_at))}</span>
         ${isCompacted ? '<span class="message-compacted-badge" title="此消息已压缩，不会发送给模型">已压缩</span>' : ""}
+        ${!isPending && !isCompacted ? `<button class="message-fork-btn" type="button" data-fork-session data-message-index="${escapeHtml(String(messageIndex))}" data-message-id="${escapeHtml(messageId)}" title="从此处分叉会话">从此处分叉</button>` : ""}
+        ${isLastAssistant && !isPending && !isCompacted ? `<button class="message-regenerate-btn" type="button" data-regenerate-message data-message-id="${escapeHtml(messageId)}" title="重新生成回复">重新生成</button>` : ""}
       </div>
       <div class="message-bubble">
         ${
@@ -1866,15 +1880,16 @@ function renderMessageMarkup(message) {
   };
 }
 
-function syncMessageNode(node, message) {
+function syncMessageNode(node, message, { isLastAssistant = false } = {}) {
   const signature = messageRenderSignature(message);
-  if (node.__renderSignature === signature) {
+  if (node.__renderSignature === signature && node.__isLastAssistant === isLastAssistant) {
     return;
   }
 
-  const view = renderMessageMarkup(message);
+  const view = renderMessageMarkup(message, { isLastAssistant });
   node.dataset.messageId = String(message.id || "");
   node.__renderSignature = signature;
+  node.__isLastAssistant = isLastAssistant;
   node.className = view.className;
   node.innerHTML = view.markup;
 }
@@ -2106,6 +2121,80 @@ function wireCompactedMessagesToggle() {
   });
 }
 
+let _forkButtonsWired = false;
+
+function wireForkButtons() {
+  if (_forkButtonsWired) {
+    return;
+  }
+  _forkButtonsWired = true;
+
+  document.addEventListener("click", async (event) => {
+    const btn = event.target.closest("[data-fork-session]");
+    if (!btn) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+
+    const sessionId = state.selectedSessionId;
+    if (!sessionId) {
+      return;
+    }
+
+    const messageIndex = parseInt(btn.dataset.messageIndex, 10) || -1;
+
+    btn.disabled = true;
+    btn.textContent = "分叉中…";
+
+    try {
+      const { forkSession } = await import("./api.js");
+      await forkSession(sessionId, messageIndex);
+    } catch (error) {
+      console.error("Fork session failed:", error);
+      btn.disabled = false;
+      btn.textContent = "从此处分叉";
+      window.alert(`分叉失败：${String(error.message || error)}`);
+    }
+  });
+}
+
+let _regenerateButtonsWired = false;
+
+function wireRegenerateButtons() {
+  if (_regenerateButtonsWired) {
+    return;
+  }
+  _regenerateButtonsWired = true;
+
+  document.addEventListener("click", async (event) => {
+    const btn = event.target.closest("[data-regenerate-message]");
+    if (!btn) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+
+    const sessionId = state.selectedSessionId;
+    if (!sessionId) {
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "重新生成中…";
+
+    try {
+      const { regenerateMessage } = await import("./api.js");
+      await regenerateMessage(sessionId);
+    } catch (error) {
+      console.error("Regenerate message failed:", error);
+      btn.disabled = false;
+      btn.textContent = "重新生成";
+      window.alert(`重新生成失败：${String(error.message || error)}`);
+    }
+  });
+}
+
 function renderMessagesFast() {
   const root = byId("chat-thread");
   if (!root) {
@@ -2140,6 +2229,16 @@ function renderMessagesFast() {
 
   const compactedMessages = messages.filter((msg) => msg.compacted);
   const activeMessages = messages.filter((msg) => !msg.compacted);
+
+  // Determine the last assistant message id (excluding compacted)
+  const lastAssistantId = (() => {
+    for (let i = activeMessages.length - 1; i >= 0; i--) {
+      if (activeMessages[i].role === "assistant") {
+        return activeMessages[i].id || "";
+      }
+    }
+    return "";
+  })();
 
   const existingById = new Map(
     Array.from(root.children)
@@ -2182,6 +2281,7 @@ function renderMessagesFast() {
 
   for (const message of activeMessages) {
     const messageId = String(message.id || "");
+    const isLastAssistant = messageId === lastAssistantId;
     let node = existingById.get(messageId);
     if (!node) {
       node = document.createElement("article");
@@ -2189,10 +2289,10 @@ function renderMessagesFast() {
     }
     if (node instanceof HTMLElement && isMessageRenderingFrozen(messageId)) {
       if (!patchFrozenAssistantMessage(node, message)) {
-        syncMessageNode(node, message);
+        syncMessageNode(node, message, { isLastAssistant });
       }
     } else {
-      syncMessageNode(node, message);
+      syncMessageNode(node, message, { isLastAssistant });
     }
 
     if (node !== anchor) {
@@ -2211,6 +2311,8 @@ function renderMessagesFast() {
   }
 
   wireCompactedMessagesToggle();
+  wireForkButtons();
+  wireRegenerateButtons();
 
   if (scrollContainer && shouldStickToBottom) {
     stickChatToBottom(scrollContainer);
@@ -2219,7 +2321,6 @@ function renderMessagesFast() {
 
 export function renderComposer() {
   const textarea = byId("goal");
-  const hint = byId("composer-hint");
   const submitButton = byId("submit-button");
   const submitButtonLabel = byId("submit-button-label");
   const session = selectedSession();
@@ -2227,8 +2328,6 @@ export function renderComposer() {
     return;
   }
   const busy = state.isSubmitting || isSessionBusyStatus(session?.status);
-  const compacting = isSessionCompacting(session);
-  const runtime = session ? getSessionRuntimeSnapshot(session) : null;
   const submitLabel = busy ? "处理中" : session && state.selectedSessionId ? "继续对话" : "发送并新建";
 
   textarea.placeholder = state.defaultGoal || bootstrap.defaultGoal || "";
@@ -2237,26 +2336,6 @@ export function renderComposer() {
   submitButton.setAttribute("aria-label", submitLabel);
   submitButton.setAttribute("title", submitLabel);
   setNodeText(submitButtonLabel, submitLabel);
-
-  if (!hint) {
-    return;
-  }
-
-  if (session && state.selectedSessionId) {
-    hint.hidden = false;
-    setNodeText(
-      hint,
-      busy
-        ? `${runtimeHeadline(session, runtime)} | ${runtimeDetail(session, runtime)}`
-        : compacting
-          ? `正在后台压缩记忆，不影响继续输入。新消息会继续追加到「${truncate(session.title || session.id, 28)}」中。`
-          : `新消息会追加到「${truncate(session.title || session.id, 28)}」中。${runtime?.latestToolResultName ? ` 最近一次工具返回：${truncate(runtime.latestToolResultName, 24)}。` : ""}`,
-    );
-    return;
-  }
-
-  hint.hidden = false;
-  setNodeText(hint, "当前输入会创建新会话，发送后会立即进入流式执行。");
 }
 
 export function renderApp() {
@@ -2265,4 +2344,571 @@ export function renderApp() {
   renderMessagesFast();
   renderComposer();
   renderKnowledgeLibrary();
+  renderMetricsCard();
+  updateTokenUsageBar();
+  renderFindings();
+  renderSteps();
+}
+
+// ── Token Usage Bar Update ────────────────────────────────────
+function updateTokenUsageBar() {
+  const bar = byId("token-usage-bar");
+  const fill = byId("token-usage-fill");
+  const text = byId("token-usage-text");
+  const costEl = byId("token-usage-cost");
+  const cacheEl = byId("token-usage-cache");
+  if (!bar || !fill || !text) return;
+
+  const session = selectedSession();
+  if (!session || !session.token_usage) {
+    bar.hidden = true;
+    return;
+  }
+
+  const usage = session.token_usage;
+  const total = usage.budget || 128000;
+  const used = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+  const ratio = Math.min(used / total, 1);
+  const pct = Math.round(ratio * 100);
+
+  bar.hidden = false;
+  text.textContent = `${(used / 1000).toFixed(1)}k / ${(total / 1000).toFixed(0)}k`;
+  fill.style.width = `${pct}%`;
+
+  fill.className = "token-usage-bar-fill " + (
+    ratio < 0.6 ? "low" : ratio < 0.85 ? "medium" : "high"
+  );
+
+  // Estimated cost display
+  if (costEl) {
+    const estimatedCost = usage.estimated_cost_usd;
+    if (estimatedCost !== undefined && estimatedCost !== null) {
+      costEl.textContent = `$${Number(estimatedCost).toFixed(2)}`;
+      costEl.hidden = false;
+    } else {
+      costEl.hidden = true;
+    }
+  }
+
+  // Cache hit rate display
+  if (cacheEl) {
+    const cacheHitRatio = usage.cache_hit_ratio;
+    if (cacheHitRatio !== undefined && cacheHitRatio !== null) {
+      cacheEl.textContent = `Cache: ${Math.round(Number(cacheHitRatio) * 100)}%`;
+      cacheEl.hidden = false;
+    } else {
+      cacheEl.hidden = true;
+    }
+  }
+}
+
+// ── Session Meta Chips ────────────────────────────────────────
+function updateSessionMetaChips() {
+  const container = byId("session-meta-chips");
+  if (!container) return;
+
+  const session = selectedSession();
+  if (!session) {
+    container.hidden = true;
+    return;
+  }
+
+  const chips = [];
+  if (session.mode) chips.push(`<span class="meta-chip">模式: ${escapeHtml(session.mode)}</span>`);
+  if (session.start_url) chips.push(`<span class="meta-chip"><code>${escapeHtml(truncate(session.start_url, 30))}</code></span>`);
+  if (session.knowledge_base_count > 0) chips.push(`<span class="meta-chip">📚 ${session.knowledge_base_count}</span>`);
+
+  if (chips.length === 0) {
+    container.hidden = true;
+    return;
+  }
+
+  container.hidden = false;
+  container.innerHTML = `<div style="display: flex; flex-wrap: wrap; gap: var(--space-sm);">${chips.join("")}</div>`;
+}
+
+// ── Empty State ────────────────────────────────────────────────
+function renderEmptyState(type, title, subtitle) {
+  const icons = {
+    "select-session": '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>',
+    "no-findings": '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>',
+    "no-steps": '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+  };
+  return '<div class="sidebar-empty-state"><div class="sidebar-empty-icon">' + (icons[type] || icons["no-findings"]) + '</div><div class="sidebar-empty-title">' + escapeHtml(title) + '</div><div class="sidebar-empty-subtitle">' + escapeHtml(subtitle) + '</div></div>';
+}
+
+// ── Metrics Card ───────────────────────────────────────────────
+function renderMetricsCard() {
+  const card = byId("metrics-card");
+  if (!card) return;
+  const session = selectedSession();
+  if (!session || !state.selectedSessionId) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const activeCount = messages.filter((msg) => !msg.compacted).length;
+  const totalTokens = session.token_usage ? (session.token_usage.total_tokens || 0) : 0;
+  const hasAllowedHosts = Array.isArray(session.allowed_hosts) && session.allowed_hosts.length > 0;
+  const scopeText = hasAllowedHosts ? session.allowed_hosts.length + " 项" : "无限制";
+  const runtime = getSessionRuntimeSnapshot(session);
+  const toolText = runtime && (runtime.latestToolName || runtime.latestToolResultName) ? (runtime.latestToolName || runtime.latestToolResultName) : "-";
+  const msgEl = byId("metric-messages");
+  const tokEl = byId("metric-tokens");
+  const toolEl = byId("metric-tool");
+  const scopeEl = byId("metric-scope");
+  if (msgEl) msgEl.textContent = String(activeCount);
+  if (tokEl) tokEl.textContent = totalTokens > 0 ? (totalTokens / 1000).toFixed(1) + "k" : "-";
+  if (toolEl) toolEl.textContent = toolText;
+  if (scopeEl) scopeEl.textContent = scopeText;
+  // Show progress detail from update_progress tool if available
+  const progressEl = byId("metric-progress");
+  if (progressEl) {
+    if (state.progress && state.progressSessionId === state.selectedSessionId) {
+      progressEl.textContent = state.progress.detail || "";
+      progressEl.title = state.progress.detail || "";
+      progressEl.hidden = false;
+    } else {
+      progressEl.hidden = true;
+    }
+  }
+}
+
+// ── Findings Panel ──────────────────────────────────────────────
+function renderFindings() {
+  const panel = byId("findings-panel");
+  const list = byId("findings-list");
+  const count = byId("findings-count");
+  if (!panel || !list) return;
+  panel.hidden = false;
+  const findings = state.findings || [];
+  const hasSession = Boolean(state.selectedSessionId);
+  if (count) count.textContent = findings.length;
+  if (!hasSession) {
+    list.innerHTML = renderEmptyState("select-session", "选择会话", "切换到左侧会话列表开始");
+    return;
+  }
+  if (!findings.length) {
+    list.innerHTML = renderEmptyState("no-findings", "暂无发现", "安全评估进行中，发现将实时显示");
+    return;
+  }
+  const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const sorted = [...findings].sort(
+    (a, b) => (severityOrder[a.severity] ?? 5) - (severityOrder[b.severity] ?? 5)
+  );
+  list.innerHTML = sorted
+    .map((f) => {
+      const sev = String(f.severity || "info").toLowerCase();
+      const title = escapeHtml(f.title || "Untitled");
+      const summary = escapeHtml(truncate(f.summary || "", 80));
+      const sevLabel = { critical: "严重", high: "高危", medium: "中危", low: "低危", info: "信息" }[sev] || sev;
+      return '<div class="finding-item finding-severity-' + sev + '"><div class="finding-header"><span class="finding-severity-badge severity-' + sev + '">' + sevLabel + '</span><span class="finding-title">' + title + '</span></div>' + (summary ? '<p class="finding-summary">' + summary + '</p>' : '') + '</div>';
+    })
+    .join("");
+}
+
+// ── Steps Progress Panel ────────────────────────────────────────
+function renderSteps() {
+  const panel = byId("steps-panel");
+  const list = byId("steps-list");
+  const count = byId("steps-count");
+  if (!panel || !list) return;
+  panel.hidden = false;
+  const steps = state.steps || [];
+  const hasSession = Boolean(state.selectedSessionId);
+  if (count) count.textContent = steps.length;
+  if (!hasSession) {
+    list.innerHTML = renderEmptyState("select-session", "选择会话", "切换到左侧会话列表开始");
+    return;
+  }
+  if (!steps.length) {
+    list.innerHTML = renderEmptyState("no-steps", "暂无步骤", "发送消息后执行步骤将显示在这里");
+    return;
+  }
+  list.innerHTML = steps
+    .map((step, idx) => {
+      const stepState = String(step.state || "succeeded").toLowerCase();
+      const stateLabel = { succeeded: "\u2713", failed: "\u2717", running: "\u27F3", pending: "\u25CB", skipped: "\u2298" }[stepState] || "\u25CB";
+      const toolName = escapeHtml(step.tool_name || step.action || "unknown");
+      const observation = escapeHtml(truncate(step.observation || "", 60));
+      const duration = step.duration_ms ? Math.round(step.duration_ms) + "ms" : "";
+      const tokens = step.token_usage ? ((step.token_usage.input_tokens || 0) + (step.token_usage.output_tokens || 0)) + " tok" : "";
+      return '<div class="step-item step-state-' + stepState + '"><div class="step-header"><span class="step-index">' + (idx + 1) + '</span><span class="step-state-icon">' + stateLabel + '</span><span class="step-tool-name">' + toolName + '</span><span class="step-meta">' + duration + (tokens ? " \u00B7 " + tokens : "") + '</span></div>' + (observation ? '<p class="step-observation">' + observation + '</p>' : "") + '</div>';
+    })
+    .join("");
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Message Search
+   ═══════════════════════════════════════════════════════════════════ */
+
+const searchState = {
+  open: false,
+  query: "",
+  currentIndex: -1,
+  totalMatches: 0,
+  /** @type {Map<HTMLElement, string>} */
+  originalContents: new Map(),
+};
+
+/**
+ * Open the search panel, focus the input, and restore any previous query.
+ */
+export function openSearchPanel() {
+  const panel = byId("search-panel");
+  const input = byId("search-input");
+  if (!panel || !input) return;
+
+  panel.hidden = false;
+  searchState.open = true;
+
+  // Restore previous query if any
+  if (searchState.query) {
+    input.value = searchState.query;
+    performSearch(searchState.query);
+  }
+
+  input.focus();
+  input.select();
+}
+
+/**
+ * Close the search panel and clear all highlights.
+ */
+export function closeSearchPanel() {
+  const panel = byId("search-panel");
+  if (!panel) return;
+
+  panel.hidden = true;
+  searchState.open = false;
+  clearHighlights();
+  updateSearchCount();
+}
+
+/**
+ * Escape special regex characters in a string.
+ */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Collect all text-containing elements inside the chat thread that should be searched.
+ * We target the rendered markdown-body divs inside message-bubble elements.
+ */
+function getSearchableElements() {
+  const chatThread = byId("chat-thread");
+  if (!chatThread) return [];
+  return Array.from(chatThread.querySelectorAll(".message-bubble .markdown-body"));
+}
+
+/**
+ * Save the original innerHTML of all searchable elements (if not already saved).
+ */
+function saveOriginalContents(elements) {
+  for (const el of elements) {
+    if (!searchState.originalContents.has(el)) {
+      searchState.originalContents.set(el, el.innerHTML);
+    }
+  }
+}
+
+/**
+ * Restore all searchable elements to their original content and clear saved data.
+ */
+function clearHighlights() {
+  for (const [el, originalHtml] of searchState.originalContents) {
+    // Only restore if the element is still in the DOM
+    if (el.isConnected) {
+      el.innerHTML = originalHtml;
+    }
+  }
+  searchState.originalContents.clear();
+  searchState.currentIndex = -1;
+  searchState.totalMatches = 0;
+}
+
+/**
+ * Perform the search: highlight all matches in message text and navigate to the current index.
+ */
+function performSearch(query) {
+  clearHighlights();
+
+  searchState.query = query;
+
+  if (!query) {
+    updateSearchCount();
+    updateNavButtons();
+    return;
+  }
+
+  const elements = getSearchableElements();
+  if (elements.length === 0) {
+    updateSearchCount();
+    updateNavButtons();
+    return;
+  }
+
+  saveOriginalContents(elements);
+
+  const escapedQuery = escapeRegex(query);
+  const regex = new RegExp(escapedQuery, "gi");
+  let totalMatches = 0;
+
+  for (const el of elements) {
+    const originalHtml = searchState.originalContents.get(el);
+    if (!originalHtml) continue;
+
+    // We only replace text outside of HTML tags to avoid breaking markup.
+    // Strategy: walk text nodes and wrap matches in <mark> tags.
+    const newHtml = highlightInTextNodes(el, regex);
+    el.innerHTML = newHtml;
+
+    totalMatches += el.querySelectorAll(".search-highlight").length;
+  }
+
+  searchState.totalMatches = totalMatches;
+
+  // Navigate to first match
+  if (totalMatches > 0) {
+    searchState.currentIndex = 0;
+  } else {
+    searchState.currentIndex = -1;
+  }
+
+  updateSearchCount();
+  updateNavButtons();
+  scrollToCurrentMatch();
+}
+
+/**
+ * Highlight matches within text nodes of an element, preserving HTML structure.
+ * Returns the new outerHTML of the element.
+ */
+function highlightInTextNodes(container, regex) {
+  const fragment = document.createDocumentFragment();
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+
+  const textNodes = [];
+  while (walker.nextNode()) {
+    textNodes.push(walker.currentNode);
+  }
+
+  if (textNodes.length === 0) {
+    return container.innerHTML;
+  }
+
+  // Build a replacement map: for each text node, create replacement nodes
+  const clone = container.cloneNode(false);
+
+  function processNode(parent, textNode) {
+    const text = textNode.textContent;
+    if (!regex.test(text)) {
+      parent.appendChild(document.createTextNode(text));
+      return;
+    }
+    regex.lastIndex = 0;
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      }
+      const mark = document.createElement("mark");
+      mark.className = "search-highlight";
+      mark.textContent = match[0];
+      parent.appendChild(mark);
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      parent.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
+  }
+
+  // Reconstruct the element by cloning the structure and replacing text nodes
+  function rebuildNode(originalNode) {
+    if (originalNode.nodeType === Node.TEXT_NODE) {
+      return; // handled separately
+    }
+
+    if (originalNode.nodeType === Node.ELEMENT_NODE) {
+      const cloned = originalNode.cloneNode(false);
+      for (const child of originalNode.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          processNode(cloned, child);
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          const rebuilt = rebuildNode(child);
+          if (rebuilt) cloned.appendChild(rebuilt);
+        }
+      }
+      return cloned;
+    }
+    return null;
+  }
+
+  // Simpler approach: use innerHTML replacement on text-only segments
+  // Actually, let's use a more reliable approach with Range and serialization
+  return replaceTextInHtml(container.innerHTML, regex);
+}
+
+/**
+ * Replace text matches in HTML string, being careful to only match outside tags.
+ */
+function replaceTextInHtml(html, regex) {
+  // Split the HTML into tag and non-tag segments
+  const segments = html.split(/(<[^>]*>)/g);
+
+  for (let i = 0; i < segments.length; i++) {
+    // Only process odd-indexed segments (text content, not tags)
+    if (i % 2 === 0) {
+      segments[i] = segments[i].replace(regex, (match) => {
+        return `<mark class="search-highlight">${escapeHtmlSimple(match)}</mark>`;
+      });
+    }
+  }
+
+  return segments.join("");
+}
+
+/**
+ * Simple HTML escaping for search highlight text content.
+ */
+function escapeHtmlSimple(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/**
+ * Navigate to the next search match.
+ */
+export function searchNext() {
+  if (searchState.totalMatches === 0) return;
+  searchState.currentIndex = (searchState.currentIndex + 1) % searchState.totalMatches;
+  updateSearchCount();
+  scrollToCurrentMatch();
+}
+
+/**
+ * Navigate to the previous search match.
+ */
+export function searchPrev() {
+  if (searchState.totalMatches === 0) return;
+  searchState.currentIndex = (searchState.currentIndex - 1 + searchState.totalMatches) % searchState.totalMatches;
+  updateSearchCount();
+  scrollToCurrentMatch();
+}
+
+/**
+ * Update the "X of Y" count display.
+ */
+function updateSearchCount() {
+  const countEl = byId("search-count");
+  if (!countEl) return;
+
+  if (!searchState.query) {
+    countEl.textContent = "";
+  } else if (searchState.totalMatches === 0) {
+    countEl.textContent = "无匹配";
+  } else {
+    countEl.textContent = `${searchState.currentIndex + 1} / ${searchState.totalMatches}`;
+  }
+}
+
+/**
+ * Enable/disable prev/next buttons based on match count.
+ */
+function updateNavButtons() {
+  const prevBtn = byId("search-prev");
+  const nextBtn = byId("search-next");
+  if (prevBtn) prevBtn.disabled = searchState.totalMatches === 0;
+  if (nextBtn) nextBtn.disabled = searchState.totalMatches === 0;
+}
+
+/**
+ * Scroll to the currently selected match and visually distinguish it.
+ */
+function scrollToCurrentMatch() {
+  const chatThread = byId("chat-thread");
+  if (!chatThread) return;
+
+  // Remove current highlight class from all
+  chatThread.querySelectorAll(".search-highlight-current").forEach((el) => {
+    el.classList.remove("search-highlight-current");
+  });
+
+  if (searchState.currentIndex < 0 || searchState.totalMatches === 0) return;
+
+  const allHighlights = chatThread.querySelectorAll(".search-highlight");
+  const target = allHighlights[searchState.currentIndex];
+  if (!target) return;
+
+  target.classList.add("search-highlight-current");
+
+  // Scroll into view within the scroll container
+  const scrollContainer = chatThread.parentElement;
+  if (!scrollContainer) return;
+
+  const targetRect = target.getBoundingClientRect();
+  const containerRect = scrollContainer.getBoundingClientRect();
+
+  // Check if the target is outside the visible area
+  if (
+    targetRect.top < containerRect.top + 60 ||
+    targetRect.bottom > containerRect.bottom - 20
+  ) {
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+/**
+ * Wire up the search panel event listeners. Called once from app.js.
+ */
+export function wireSearchPanel() {
+  const panel = byId("search-panel");
+  const input = byId("search-input");
+  const closeBtn = byId("search-close");
+  const prevBtn = byId("search-prev");
+  const nextBtn = byId("search-next");
+
+  if (!panel || !input) return;
+
+  // Real-time search on input
+  input.addEventListener("input", () => {
+    performSearch(input.value.trim());
+  });
+
+  // Enter / Shift+Enter for next/prev
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        searchPrev();
+      } else {
+        searchNext();
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSearchPanel();
+    }
+  });
+
+  if (closeBtn) {
+    closeBtn.addEventListener("click", closeSearchPanel);
+  }
+
+  if (prevBtn) {
+    prevBtn.addEventListener("click", searchPrev);
+  }
+
+  if (nextBtn) {
+    nextBtn.addEventListener("click", searchNext);
+  }
+}
+
+/**
+ * Check if the search panel is currently open.
+ */
+export function isSearchPanelOpen() {
+  return searchState.open;
 }

@@ -7,6 +7,7 @@ param(
     [switch]$SkipNmapInstall,
     [switch]$SkipPythonRuntimeCheck,
     [switch]$SkipPythonRuntimeRepair,
+    [switch]$SkipFrontendBuild,
     [string]$SqlmapRepo = "https://github.com/sqlmapproject/sqlmap.git",
     [string]$SqlmapRef = "master",
     [string]$DirsearchRepo = "https://github.com/maurosoria/dirsearch.git",
@@ -366,7 +367,15 @@ if (-not $SkipUvSync) {
     if (-not $env:UV_INDEX_URL) {
         $env:UV_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
     }
-    Invoke-External -FilePath "uv" -Arguments @("sync")
+    try {
+        Invoke-External -FilePath "uv" -Arguments @("sync")
+    }
+    catch {
+        Write-Warning "uv sync failed: $($_.Exception.Message)"
+        Write-Warning "This is usually caused by a running server process locking the executable."
+        Write-Warning "If dependencies are up to date, you can safely ignore this warning."
+        Write-Warning "To fix: stop all running AutoSongshu processes and retry, or use -SkipUvSync."
+    }
 }
 else {
     Write-Step "Skipping uv sync."
@@ -430,6 +439,46 @@ else {
 }
 
 Ensure-NmapAvailable -ProjectRoot $ProjectRoot
+
+# ── Frontend build ──────────────────────────────────────────────────
+$FrontendDir = Join-Path $ProjectRoot "frontend"
+if (-not $SkipFrontendBuild -and (Test-Path -LiteralPath (Join-Path $FrontendDir "package.json"))) {
+    if (-not (Test-CommandExists "node")) {
+        Write-Warning "Node.js is not installed. Skipping frontend build. The backend will fall back to legacy templates."
+    }
+    elseif (-not (Test-CommandExists "npm")) {
+        Write-Warning "npm is not installed. Skipping frontend build. The backend will fall back to legacy templates."
+    }
+    else {
+        Write-Step "Building frontend (npm install && npm run build)..."
+        if (-not $DryRun) {
+            Push-Location -LiteralPath $FrontendDir
+            try {
+                & npm install
+                if ($LASTEXITCODE -ne 0) {
+                    throw "npm install failed with exit code $LASTEXITCODE"
+                }
+                & npm run build
+                if ($LASTEXITCODE -ne 0) {
+                    throw "npm run build failed with exit code $LASTEXITCODE"
+                }
+                Write-Step "Frontend build complete. Output: frontend/dist/"
+            }
+            finally {
+                Pop-Location
+            }
+        }
+        else {
+            Write-Host "Command: cd $FrontendDir && npm install && npm run build" -ForegroundColor DarkGray
+        }
+    }
+}
+elseif ($SkipFrontendBuild) {
+    Write-Step "Skipping frontend build."
+}
+else {
+    Write-Step "No frontend/package.json found. Skipping frontend build."
+}
 
 if (-not $SkipStatusChecks) {
     $sqlmapStatus = Invoke-StatusScript -ProjectRoot $ProjectRoot -Name "sqlmap-sqli" -RelativeScriptPath "skills\sqlmap-sqli\scripts\sqlmap_status.py"

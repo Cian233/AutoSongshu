@@ -27,3 +27,5 @@ README.local.md
 
 test/
 *.zip
+
+*.log

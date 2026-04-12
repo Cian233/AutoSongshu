@@ -18,6 +18,8 @@ from ..memory import (
 from .harness import BaseAgentHarness
 from .coordinator import ConversationReply
 from .prompts import _CONTINUATION_PROMPT
+from .step_model import AgentStep, StepState, TaskState
+from .trajectory import TrajectoryRecorder
 from .utils import (
     _StreamLoopGuard,
     _continue_response_until_settled,
@@ -42,6 +44,9 @@ class PentestConversationSession(BaseAgentHarness):
         )
         self._memory_context = ""
         self.memory_model = self._build_memory_model()
+        self.trajectory_recorder = TrajectoryRecorder(
+            self.runtime.artifacts.path("trajectories")
+        )
 
     async def observe_history_async(self, messages: list[Msg]) -> None:
         if not messages:
@@ -169,6 +174,9 @@ class PentestConversationSession(BaseAgentHarness):
             )
 
         try:
+            self.trajectory_recorder.start_session(
+                session_id=self.runtime.artifacts.session_dir.name
+            )
             response = await _run_agent_turn(
                 _prepare_user_message(
                     user_message,
@@ -184,11 +192,15 @@ class PentestConversationSession(BaseAgentHarness):
                 continuation_prompt=_CONTINUATION_PROMPT,
             )
             self.runtime.persist_runtime_logs()
+            self.trajectory_recorder.end_session(state=TaskState.COMPLETED)
             return ConversationReply(
                 assistant_message=assistant_message,
                 artifact_dir=str(self.runtime.artifacts.session_dir),
                 blocks=blocks,
             )
+        except Exception:
+            self.trajectory_recorder.end_session(state=TaskState.ERROR)
+            raise
         finally:
             if stop_event is not None:
                 stop_event.set()

@@ -23,6 +23,11 @@ class ModelConfig(BaseModel):
     stream: bool = True
     max_tokens: int | None = None
     timeout: float = 120.0
+    fallbacks: list[str] = Field(
+        default_factory=list,
+        description="List of fallback model names to try when the primary model fails "
+                    "(e.g. on 429/500/503 errors).",
+    )
 
 
 class BrowserConfig(BaseModel):
@@ -120,7 +125,7 @@ class AgentConfig(BaseModel):
     max_iters: int = 12
     max_subtasks: int = 8
     parallel_tool_calls: bool = False
-    enable_meta_tool: bool = False
+    enable_meta_tool: bool = True
     loop_guard_enabled: bool = True
     mode: Literal["auto", "semi-auto"] = "auto"
 

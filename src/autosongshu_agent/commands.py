@@ -81,14 +81,20 @@ class StatsCommand(SlashCommand):
         if conversation is not None:
             tracker = getattr(conversation, "cost_tracker", None)
             if tracker is not None and hasattr(tracker, "summary_dict"):
-                summary = tracker.summary_dict()
-                usage_text = (
-                    f"**Token 消耗统计**\n"
-                    f"- Input Tokens: {summary.get('input_tokens', 0)}\n"
-                    f"- Output Tokens: {summary.get('output_tokens', 0)}\n"
-                    f"- Total Tokens: {summary.get('total_tokens', 0)}\n"
-                    f"- Events: {summary.get('event_count', 0)}"
-                )
+                model_name = ctx.session._get_model_name() if hasattr(ctx.session, "_get_model_name") else ""
+                summary = tracker.summary_dict(model_name=model_name)
+                lines = [
+                    "**Token 消耗统计**",
+                    f"- Input Tokens: {summary.get('input_tokens', 0)}",
+                    f"- Output Tokens: {summary.get('output_tokens', 0)}",
+                    f"- Total Tokens: {summary.get('total_tokens', 0)}",
+                    f"- Events: {summary.get('event_count', 0)}",
+                ]
+                if summary.get("estimated_cost_usd") is not None:
+                    lines.append(f"- Estimated Cost: ${summary['estimated_cost_usd']:.4f}")
+                if summary.get("cache_hit_ratio") is not None:
+                    lines.append(f"- Cache Hit Rate: {summary['cache_hit_ratio'] * 100:.1f}%")
+                usage_text = "\n".join(lines)
         return CommandResult(response_text=usage_text)
 
 

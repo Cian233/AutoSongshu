@@ -2,9 +2,12 @@
 name: sqlmap-sqli
 description: Scoped SQL injection verification with the bundled sqlmap source tree. Use when the operator explicitly asks for sqlmap, SQL injection testing, raw HTTP request replay, form or anti-CSRF-aware injectable parameter verification, or conservative database fingerprinting and schema enumeration on authorized HTTP or HTTPS targets.
 activation: auto
+version: "1.0"
+tags: [recon, web, sqli, injection]
 requires_tools:
   - list_skill_scripts
   - run_skill_script
+when_to_use: "When the operator asks for SQL injection testing, sqlmap, or database-related vulnerability verification."
 ---
 
 # Sqlmap SQLi
