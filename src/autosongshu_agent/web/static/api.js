@@ -89,9 +89,10 @@ function showApprovalModal(request) {
       riskBadge.classList.add("is-critical");
     }
   }
-  const rememberCheckbox = byId("approval-remember-session");
-  if (rememberCheckbox) {
-    rememberCheckbox.checked = false;
+  // Reset scope selection to default
+  const onceRadio = modal.querySelector('input[name="approval-scope"][value="once"]');
+  if (onceRadio) {
+    onceRadio.checked = true;
   }
   const alwaysAllowCheckbox = byId("approval-always-allow");
   if (alwaysAllowCheckbox) {
@@ -956,7 +957,8 @@ export async function wireCommandAutocomplete() {
     const text = textarea.value || "";
     const cursorPos = textarea.selectionStart || 0;
     const beforeCursor = text.slice(0, cursorPos);
-    const slashMatch = beforeCursor.match(/\/[a-zA-Z]*$/);
+    // Only show suggestions when / is at the start of the input
+    const slashMatch = beforeCursor.match(/^\/[a-zA-Z]*$/);
     if (slashMatch) {
       const filter = slashMatch[0];
       showCommandSuggestions(commands, filter);
@@ -991,7 +993,7 @@ export async function wireCommandAutocomplete() {
         const cursorPos = textarea.selectionStart || 0;
         const beforeCursor = text.slice(0, cursorPos);
         const afterCursor = text.slice(cursorPos);
-        const slashMatch = beforeCursor.match(/\/[a-zA-Z]*$/);
+        const slashMatch = beforeCursor.match(/^\/[a-zA-Z]*$/);
         if (slashMatch) {
           const newText = beforeCursor.slice(0, -slashMatch[0].length) + commandName + " " + afterCursor;
           textarea.value = newText;
@@ -1015,7 +1017,7 @@ export async function wireCommandAutocomplete() {
     const cursorPos = textarea.selectionStart || 0;
     const beforeCursor = text.slice(0, cursorPos);
     const afterCursor = text.slice(cursorPos);
-    const slashMatch = beforeCursor.match(/\/[a-zA-Z]*$/);
+    const slashMatch = beforeCursor.match(/^\/[a-zA-Z]*$/);
     if (slashMatch) {
       const newText = beforeCursor.slice(0, -slashMatch[0].length) + commandName + " " + afterCursor;
       textarea.value = newText;

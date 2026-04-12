@@ -85,6 +85,7 @@ class ChatManagerKnowledgeTests(unittest.TestCase):
             "title": "登录流程渗透经验",
             "content": "## 关键发现\n- 可枚举账号\n",
             "model_name": "stub-model",
+            "token_usage": {"input_tokens": 100, "output_tokens": 50},
         }
 
         result = self.manager.create_knowledge_document_from_session(
@@ -153,6 +154,7 @@ class ChatManagerKnowledgeTests(unittest.TestCase):
             "title": "自动关联测试",
             "content": "## 关键发现\n- done\n",
             "model_name": "stub-model",
+            "token_usage": {"input_tokens": 80, "output_tokens": 40},
         }
 
         result = self.manager.create_knowledge_document_from_session(

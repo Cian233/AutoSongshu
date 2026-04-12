@@ -11,7 +11,7 @@ from agentscope.tool import Toolkit
 
 from ..config import AppConfig
 from .formatter import SafeOpenAIChatFormatter
-from ..prompts import build_system_prompt
+from ..prompts_legacy import build_system_prompt  # Import from legacy module
 from ..runtime import PentestRuntime
 from ..skills import SkillLoadReport, SkillRegistry, SkillRuntimeContext
 from ..tools import register_default_tools

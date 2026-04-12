@@ -30,7 +30,7 @@ from .knowledge_store import (
     KnowledgeBaseUpdateDraft,
     KnowledgeDocumentDraft,
 )
-from .interactive import InteractiveApprovalManager
+from .interactive import InteractiveApprovalManager, ApprovalScope
 from .permissions import (
     ToolRiskLevel,
     InteractivePermissionInterceptor,
@@ -955,7 +955,12 @@ def create_app() -> FastAPI:
                 status_code=404,
                 detail=f"Approval request not found: {request_id}",
             )
-        return {"success": True, "request_id": request_id, "approved": payload.approved}
+        return {
+            "success": True,
+            "request_id": request_id,
+            "approved": payload.approved,
+            "scope": payload.scope,
+        }
 
     @app.post("/api/chat/approvals/{request_id}/cancel")
     async def cancel_approval(request_id: str) -> dict[str, Any]:
