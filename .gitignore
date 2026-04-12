@@ -25,6 +25,8 @@ README.local.md
 *.local.md
 *.private.md
 
+.trae/
+
 test/
 *.zip
 
