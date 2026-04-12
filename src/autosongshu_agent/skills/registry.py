@@ -269,6 +269,12 @@ class SkillRegistry:
             if tool not in self.context.available_tools
         ]
         if missing_tools:
+            self._log.warning(
+                "Skill %s skipped: missing tools %s (available: %s)",
+                skill.name,
+                missing_tools,
+                sorted(self.context.available_tools) if self.context.available_tools else "(empty)",
+            )
             return f"Missing required tools: {', '.join(missing_tools)}."
 
         if skill.requires_browser and not self.context.browser_available:
@@ -285,6 +291,7 @@ class SkillRegistry:
                 if shutil.which(bin_name) is None
             ]
             if missing_bins:
+                self._log.warning("Skill %s skipped: missing binaries %s", skill.name, missing_bins)
                 return f"Missing required binaries: {', '.join(missing_bins)}."
 
         if skill.env_required:
@@ -293,6 +300,7 @@ class SkillRegistry:
                 if not os.environ.get(env_name)
             ]
             if missing_env:
+                self._log.warning("Skill %s skipped: missing env vars %s", skill.name, missing_env)
                 return f"Missing required environment variables: {', '.join(missing_env)}."
 
         if skill.host_patterns:
@@ -325,7 +333,11 @@ def _active_tool_names(toolkit: Toolkit) -> set[str]:
     for info in tool_registry.tools:
         active_tools.add(info.func.__name__)
     _log = logging.getLogger("autosongshu.skills")
-    _log.debug("_active_tool_names: found %d tools: %s", len(active_tools), sorted(active_tools))
+    _log.info(
+        "_active_tool_names: found %d tools: %s",
+        len(active_tools),
+        sorted(active_tools),
+    )
     return active_tools
 
 

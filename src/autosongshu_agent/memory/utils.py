@@ -125,6 +125,8 @@ def completed_messages_after_anchor(
         message
         for message in messages
         if getattr(message, "status", "") == "completed"
+        and not getattr(message, "compacted", False)
+        and getattr(message, "role", "") != "system"
         and getattr(message, "id", "") not in skipped
     ]
     if not anchor_message_id:

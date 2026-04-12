@@ -3,9 +3,7 @@ from __future__ import annotations
 import unittest
 
 from autosongshu_agent.config import AppConfig, EngagementConfig, ModelConfig
-from autosongshu_agent.prompts_legacy import (
-    build_system_prompt,
-)  # Import from legacy module
+from autosongshu_agent.prompts import build_system_prompt
 
 
 class PromptCoverageTests(unittest.TestCase):

@@ -220,6 +220,10 @@ def validate_raw_file_content(
     if not non_empty_lines:
         return
 
+    # Skip validation for very short files — false-positive prone.
+    if len(non_empty_lines) <= 6:
+        return
+
     if _MARKDOWN_FENCE_PATTERN.match(
         non_empty_lines[0]
     ) or _MARKDOWN_FENCE_PATTERN.match(non_empty_lines[-1]):
@@ -319,22 +323,24 @@ def validate_raw_file_content(
             continue
 
         if _looks_like_natural_language_line(stripped):
-            raise SandboxError(
-                "Sandbox file content must be raw code or raw file text only. Remove the explanatory prose and resend just the file content."
-            )
+            # Tolerate a few prose-like lines; only reject if excessive.
+            totals["comment_prose_lines"] += 1
+            totals["comment_prose_chars"] += len(stripped)
+            continue
 
         totals["code_lines"] += 1
 
     _finalize_comment_block(block_stats, totals)
 
-    if totals["max_block_lines"] >= 10 and totals["max_block_chars"] >= 400:
+    # Only reject if the file is overwhelmingly explanation-heavy.
+    if totals["max_block_lines"] >= 20 and totals["max_block_chars"] >= 800:
         raise SandboxError(
             "Sandbox file content contains a large explanation-heavy comment block. Keep comments concise and resend raw code only."
         )
 
     if (
-        totals["comment_prose_lines"] >= totals["code_lines"] + 4
-        and totals["comment_prose_chars"] >= 400
+        totals["comment_prose_lines"] >= totals["code_lines"] + 8
+        and totals["comment_prose_chars"] >= 800
     ):
         raise SandboxError(
             "Sandbox file content looks explanation-heavy relative to the code. Remove the reasoning text and resend raw code only."
@@ -342,8 +348,8 @@ def validate_raw_file_content(
 
     if (
         totals["code_lines"] == 0
-        and totals["comment_prose_lines"] >= 4
-        and totals["comment_prose_chars"] >= 200
+        and totals["comment_prose_lines"] >= 8
+        and totals["comment_prose_chars"] >= 400
     ):
         raise SandboxError(
             "Sandbox file content contains explanation text but no executable code. Resend the actual file content only."

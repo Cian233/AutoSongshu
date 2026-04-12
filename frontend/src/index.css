@@ -631,6 +631,67 @@ body {
 [data-theme="dark"] .compacted-messages-toggle { border-color: var(--line); color: var(--muted); }
 [data-theme="dark"] .compacted-messages-toggle:hover { background: var(--bg); color: var(--text); }
 
+/* ── Context Summary Card ─────────────────────────────────────── */
+
+.context-summary-card {
+  margin: 12px 0;
+}
+
+.context-summary-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.context-summary-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.context-summary-divider-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.context-summary-body {
+  padding: 8px 0;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--muted);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.context-summary-body :is(h1, h2, h3, h4) {
+  font-size: 0.85rem;
+  color: var(--text);
+  margin: 8px 0 4px;
+}
+
+.context-summary-body ul, .context-summary-body ol {
+  padding-left: 1.2em;
+  margin: 4px 0;
+}
+
+.context-summary-body code {
+  font-size: 0.78rem;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+[data-theme="dark"] .context-summary-divider-line {
+  background: var(--line-strong);
+}
+
+[data-theme="dark"] .context-summary-body code {
+  background: var(--bg-soft);
+}
+
 /* ── Compaction Stats ─────────────────────────────────────────── */
 
 .compaction-stats {

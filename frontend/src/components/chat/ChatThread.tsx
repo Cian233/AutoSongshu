@@ -15,6 +15,8 @@ import { useChatScroll } from "../../hooks/use-chat-scroll";
 import { CompactedMessages } from "./CompactedMessages";
 import { UserMessage } from "./UserMessage";
 import { AssistantMessage } from "./AssistantMessage";
+import { MarkdownContent } from "../markdown/MarkdownContent";
+import { messageText } from "../../lib/message-normalizer";
 
 interface ChatThreadProps {
   /** All messages for the current session (including compacted). */
@@ -36,10 +38,20 @@ function ChatThreadInner({
   const { scrollContainerRef, shouldStickToBottom, stickToBottom } =
     useChatScroll({ sessionId });
 
-  // Separate compacted and active messages
-  const { compactedMessages, activeMessages, lastAssistantId } = useMemo(() => {
+  // Separate compacted, system summary, and active messages
+  const { compactedMessages, summaryMessage, activeMessages, lastAssistantId } = useMemo(() => {
     const compacted = messages.filter((msg) => msg.compacted);
-    const active = messages.filter((msg) => !msg.compacted);
+    const system: Message[] = [];
+    const active: Message[] = [];
+
+    for (const msg of messages) {
+      if (msg.compacted) continue;
+      if ((msg.role as string) === "system") {
+        system.push(msg);
+      } else {
+        active.push(msg);
+      }
+    }
 
     // Find the last assistant message ID (excluding compacted)
     let lastId = "";
@@ -52,6 +64,7 @@ function ChatThreadInner({
 
     return {
       compactedMessages: compacted,
+      summaryMessage: system[0] || null,
       activeMessages: active,
       lastAssistantId: lastId,
     };
@@ -109,6 +122,9 @@ function ChatThreadInner({
       <div id="chat-thread" data-view="messages">
         {compactedMessages.length > 0 && (
           <CompactedMessages messages={compactedMessages} />
+        )}
+        {summaryMessage && (
+          <ContextSummaryCard message={summaryMessage} />
         )}
         {activeMessages.map((message) => {
           if (message.role === "user") {
@@ -196,6 +212,35 @@ function EmptyStage() {
             </div>
           </aside>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Context Summary Divider ───────────────────────────────────────
+// Renders the compaction summary (role="system") as a divider with
+// the summary body always visible below it.
+
+function ContextSummaryCard({ message }: { message: Message }) {
+  const text = messageText(message);
+
+  // Strip the boilerplate intro line
+  const introMatch = text.match(
+    /^这是一次从上一段对话中接续的会话[，,]原因是[^\n]+。\s*\n*/,
+  );
+  const body = introMatch ? text.slice(introMatch[0].length).trim() : text;
+
+  if (!body) return null;
+
+  return (
+    <div className="context-summary-card" data-context-summary>
+      <div className="context-summary-divider">
+        <span className="context-summary-divider-line" />
+        <span className="context-summary-divider-label">上下文摘要</span>
+        <span className="context-summary-divider-line" />
+      </div>
+      <div className="context-summary-body">
+        <MarkdownContent content={body} />
       </div>
     </div>
   );

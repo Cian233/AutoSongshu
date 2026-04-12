@@ -26,6 +26,10 @@ export const API_ENDPOINTS = {
   CONFIG: "/api/chat/config",
   /** Hot-reload chat configuration */
   CONFIG_RELOAD: "/api/chat/config/reload",
+  /** List model profiles */
+  MODELS: "/api/models",
+  /** Set active model profile */
+  MODELS_ACTIVE: "/api/models/active",
 } as const;
 
 // ── Dynamic Endpoint Builders ───────────────────────────────────

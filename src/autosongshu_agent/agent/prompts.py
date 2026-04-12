@@ -94,4 +94,9 @@ __all__ = [
     "_MEMORY_SYSTEM_PROMPT",
     "_CONTINUATION_HINT_PATTERNS",
     "_SANDBOX_SCRIPT_MUTATION_TOOLS",
+    "build_system_prompt",
 ]
+
+# Re-export from the top-level prompts module so that agent submodules
+# can use a consistent relative import (from .prompts import ...).
+from autosongshu_agent.prompts import build_system_prompt  # noqa: E402

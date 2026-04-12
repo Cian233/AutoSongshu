@@ -10,8 +10,13 @@ from agentscope.plan import PlanNotebook
 from agentscope.tool import Toolkit
 
 from ..config import AppConfig
+from ..model_router import (
+    ModelRouter,
+    TaskType,
+    parse_profiles_from_config,
+)
 from .formatter import SafeOpenAIChatFormatter
-from ..prompts_legacy import build_system_prompt  # Import from legacy module
+from .prompts import build_system_prompt
 from ..runtime import PentestRuntime
 from ..skills import SkillLoadReport, SkillRegistry, SkillRuntimeContext
 from ..tools import register_default_tools
@@ -134,6 +139,18 @@ class _AgentBuilderMixin:
     runtime: PentestRuntime
     skill_report: SkillLoadReport
     permission_interceptor: Any = None
+    _model_router: ModelRouter | None = None
+
+    @property
+    def model_router(self) -> ModelRouter:
+        """Lazy-initialize and return the ModelRouter."""
+        if self._model_router is None:
+            profiles = parse_profiles_from_config(self.config.model)
+            self._model_router = ModelRouter(
+                profiles=profiles,
+                default_profile_name=getattr(self.config.model, "active", None),
+            )
+        return self._model_router
 
     def _build_model_config(
         self,
@@ -144,13 +161,32 @@ class _AgentBuilderMixin:
     ) -> OpenAIChatModel:
         """Build an OpenAIChatModel with the given overrides.
 
+        When multi-model profiles are configured, uses the active profile
+        as the base and applies overrides on top.
+
         Args:
-            model_name: Override the configured model name.  When *None* the
-                value from ``self.config.model.model_name`` is used.
-            temperature: Override the configured temperature.  When *None* the
-                value from ``self.config.model.temperature`` is used.
+            model_name: Override the configured model name.
+            temperature: Override the configured temperature.
             stream: Whether to enable streaming responses.
         """
+        router = self.model_router
+
+        # If multi-profile is configured and no explicit model_name override,
+        # use the router to build the model
+        if len(router._profiles) > 1 or (len(router._profiles) == 1
+                                           and list(router._profiles)[0] != "default"):
+            overrides: dict[str, Any] = {"stream": stream}
+            if temperature is not None:
+                overrides["temperature"] = temperature
+            if model_name:
+                # Explicit model_name override: find matching profile or build directly
+                profile = router.get_profile(model_name)
+                if profile:
+                    return router.build_model(profile, **overrides)
+                # Fall through to legacy path
+            return router.build_model_for_task(TaskType.REASONING, **overrides)
+
+        # Legacy single-model path
         effective_name = model_name or self.config.model.model_name
         api_key = self.config.model.api_key
         if not api_key and self.config.model.base_url:

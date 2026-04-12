@@ -5,10 +5,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Literal
-
-
-ApprovalScope = Literal["once", "session", "user", "project"]
+from typing import Any, Callable
 
 
 @dataclass
@@ -88,61 +85,6 @@ class InteractiveApprovalManager:
         self._lock = threading.RLock()
         self._session_decisions: dict[str, dict[str, bool]] = {}
         self._history: list[dict[str, Any]] = []
-        self._persisted_allow_tools: set[str] = set()
-        if load_persisted_rules:
-            self._load_persisted_rules()
-
-    def _load_persisted_rules(self) -> None:
-        """Load persisted allow rules from settings."""
-        try:
-            from .core.permissions.manager import PermissionManager
-            from .core.permissions.persistence import PersistenceMode
-
-            manager = PermissionManager.create(
-                persistence_mode=PersistenceMode.PERSISTENT,
-                load_existing_rules=True,
-            )
-            rules = manager.get_all_rules()
-            for rule in rules:
-                if rule.get("behavior") == "allow":
-                    self._persisted_allow_tools.add(
-                        rule.get("tool_pattern", "").lower()
-                    )
-        except Exception:
-            pass
-
-    def _persist_permission(
-        self,
-        tool_name: str,
-        scope: ApprovalScope,
-        arguments: dict[str, Any],
-    ) -> None:
-        """Persist permission rule to settings."""
-        try:
-            from .core.permissions import create_permission_manager, UserDecision
-
-            manager = create_permission_manager()
-
-            if scope == "user":
-                decision = UserDecision.approve_always_user()
-            elif scope == "project":
-                decision = UserDecision.approve_always_project()
-            else:
-                return
-
-            # Extract content pattern if possible
-            content_pattern = None
-            if "command" in arguments:
-                content_pattern = arguments["command"]
-            elif "path" in arguments:
-                content_pattern = arguments["path"]
-
-            manager.apply_decision(tool_name, decision, content_pattern=content_pattern)
-
-            # Also add to in-memory cache
-            self._persisted_allow_tools.add(tool_name.lower())
-        except Exception:
-            pass
 
     def request_approval(
         self,
@@ -163,7 +105,6 @@ class InteractiveApprovalManager:
         )
 
         with self._lock:
-            # Check if we already have a session-level decision for this tool
             if session_id in self._session_decisions:
                 session_decisions = self._session_decisions[session_id]
                 if tool_name in session_decisions:
@@ -172,7 +113,6 @@ class InteractiveApprovalManager:
                         approved=session_decisions[tool_name],
                         reason="remembered_from_previous",
                         remember_for_session=True,
-                        scope="session",
                     )
 
             pending = PendingApproval(request=request)
@@ -231,14 +171,6 @@ class InteractiveApprovalManager:
             )
             pending.request.status = "approved" if approved else "denied"
             pending.event.set()
-
-            # Handle persistence
-            if approved and scope in ("user", "project"):
-                self._persist_permission(
-                    pending.request.tool_name,
-                    scope,
-                    pending.request.arguments,
-                )
 
         if self.emit_callback:
             self.emit_callback("approval.response", pending.response.to_dict())

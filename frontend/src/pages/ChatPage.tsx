@@ -16,6 +16,7 @@ import { Composer } from "../components/chat/Composer";
 import { SearchPanel } from "../components/chat/SearchPanel";
 import { EmptyStage } from "../components/chat/EmptyStage";
 import { ApprovalModal } from "../components/approval/ApprovalModal";
+import { SettingsDialog } from "../components/settings/SettingsDialog";
 import { useSessionStore } from "../stores/use-session-store";
 import { useSearchStore } from "../stores/use-search-store";
 import { useTheme } from "../hooks/use-theme";
@@ -180,6 +181,9 @@ export default function ChatPage() {
 
       {/* Approval modal (global, rendered once) */}
       <ApprovalModal />
+
+      {/* Settings dialog (global, rendered once) */}
+      <SettingsDialog />
     </AppShell>
   );
 }

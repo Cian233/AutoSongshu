@@ -341,6 +341,16 @@ class ModelConfig(BaseModel):
                     "(e.g. on 429/500/503 errors).",
     )
 
+    # ── Multi-model routing ──
+    active: str | None = None
+    profiles: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of model profiles for multi-model routing. "
+                    "Each profile is a dict with keys: name, provider, model_name, "
+                    "api_key, base_url, temperature, top_p, max_tokens, timeout, "
+                    "stream, tasks, enabled.",
+    )
+
 
 class BrowserConfig(BaseModel):
     mode: Literal["launch", "connect_over_cdp"] = "launch"

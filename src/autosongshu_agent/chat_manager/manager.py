@@ -378,12 +378,15 @@ class ChatSessionManager:
         *,
         skip_message_ids: set[str] | None = None,
     ) -> list[ChatMessage]:
+        skipped = skip_message_ids or set()
         if not self._should_prune_compacted_history(session):
-            skipped = skip_message_ids or set()
             return [
                 message
                 for message in session.messages
-                if message.status == "completed" and message.id not in skipped
+                if message.status == "completed"
+                and not message.compacted
+                and message.role != "system"
+                and message.id not in skipped
             ]
         return completed_messages_after_anchor(
             session.messages,
@@ -489,9 +492,15 @@ class ChatSessionManager:
         anchor_message_id: str,
         updated_memory: LayeredConversationMemory,
     ) -> list[str]:
-        """Physically compact messages up to and including *anchor_message_id*.
+        """Compact messages up to and including *anchor_message_id*.
 
-        Returns the list of message IDs that were removed.
+        Instead of physically deleting old messages, we mark them as
+        ``compacted=True`` so the frontend can still display them in a
+        collapsible section.  The model context only sees the summary
+        message + messages after the anchor (handled by
+        ``_context_history_messages``).
+
+        Returns the list of message IDs that were compacted.
         """
         anchor_idx = -1
         for i, msg in enumerate(session.messages):
@@ -502,7 +511,7 @@ class ChatSessionManager:
         if anchor_idx == -1:
             return []
 
-        messages_to_delete = [m.id for m in session.messages[: anchor_idx + 1]]
+        messages_to_compact = session.messages[: anchor_idx + 1]
 
         # Create a system message containing the summary
         from ..memory.compaction import get_compact_continuation_message
@@ -513,13 +522,12 @@ class ChatSessionManager:
             recent_messages_preserved=True,
         )
 
-        # Safety check: skip physical compaction if the summary is empty or
-        # too short to preserve meaningful context.  Falling back to keeping
-        # all messages is safer than permanently deleting them.
+        # Safety check: skip compaction if the summary is empty or
+        # too short to preserve meaningful context.
         MIN_SUMMARY_CHARS = 50
         if not continuation_text or len(continuation_text.strip()) < MIN_SUMMARY_CHARS:
             logger.warning(
-                "Skipping physical compaction for session %s: "
+                "Skipping compaction for session %s: "
                 "summary is too short (%d chars) to preserve context.",
                 session.session_id,
                 len(continuation_text.strip()) if continuation_text else 0,
@@ -536,18 +544,23 @@ class ChatSessionManager:
             order_index=0,
         )
 
-        # Keep only the messages after the anchor, prepend the system message
-        session.messages = [system_message] + session.messages[anchor_idx + 1 :]
+        # Mark old messages as compacted instead of deleting them
+        compacted_ids: list[str] = []
+        for msg in messages_to_compact:
+            msg.compacted = True
+            compacted_ids.append(msg.id)
+            self._persist_message(session.session_id, msg)
+
+        # Prepend the system summary message
+        session.messages = [system_message] + session.messages
 
         # Update order index
         for i, msg in enumerate(session.messages):
             msg.order_index = i + 1
-            self._persist_message(session.session_id, msg)
+            if msg.id == system_message.id:
+                self._persist_message(session.session_id, msg)
 
-        # Delete old messages from store
-        self.session_store.delete_messages(session.session_id, messages_to_delete)
-
-        return messages_to_delete
+        return compacted_ids
 
     def _run_post_turn_memory_refresh(self, job: _MemoryRefreshJob) -> None:
         try:
@@ -812,6 +825,33 @@ class ChatSessionManager:
                 raise KeyError(session_id)
             return session.detail_dict()
 
+    def get_model_profiles(self) -> list[dict[str, Any]]:
+        """Return all configured model profiles via the ModelRouter."""
+        # Access the router from any active session's builder mixin
+        with self.lock:
+            for session in self.chat_sessions.values():
+                if hasattr(session, "model_router") and session.model_router:
+                    return session.model_router.list_profiles()
+        # No active session — build a temporary router from default config
+        try:
+            from ..model_router import parse_profiles_from_config, ModelRouter
+            config = load_config(str(self.default_config_path))
+            profiles = parse_profiles_from_config(config.model)
+            router = ModelRouter(profiles=profiles)
+            return router.list_profiles()
+        except Exception:
+            return []
+
+    def set_active_model(self, profile_name: str) -> bool:
+        """Switch the active model profile across all sessions."""
+        switched = False
+        with self.lock:
+            for session in self.chat_sessions.values():
+                if hasattr(session, "model_router") and session.model_router:
+                    if session.model_router.set_active(profile_name):
+                        switched = True
+        return switched
+
     def interrupt_session(self, session_id: str) -> dict[str, Any]:
         with self.lock:
             session = self.chat_sessions.get(session_id)
@@ -1063,7 +1103,7 @@ class ChatSessionManager:
         session_id: str,
         session_title: str,
         transcript: str,
-    ) -> tuple[str, str, str, dict[str, int]]:
+    ) -> tuple[str, str, str]:
         config = load_config(config_path)
         model_name = str(config.model.model_name or "").strip()
         if not model_name:
@@ -1172,7 +1212,6 @@ class ChatSessionManager:
             ) from exc
 
         raw_text = ""
-        token_usage: dict[str, int] = {}
         choices = (
             response_payload.get("choices")
             if isinstance(response_payload, dict)
@@ -1186,19 +1225,6 @@ class ChatSessionManager:
             raw_text = assistant_response_text(
                 message.get("content") if isinstance(message, dict) else ""
             )
-
-        if isinstance(response_payload, dict):
-            usage = response_payload.get("usage")
-            if isinstance(usage, dict):
-                token_usage = {
-                    "input_tokens": int(
-                        usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-                    ),
-                    "output_tokens": int(
-                        usage.get("completion_tokens") or usage.get("output_tokens") or 0
-                    ),
-                }
-
         raw_text = str(raw_text or "").strip()
         if not raw_text:
             raise RuntimeError("Knowledge summary model returned empty content.")
@@ -1210,9 +1236,9 @@ class ChatSessionManager:
                 parsed.get("content") or parsed.get("content_markdown") or ""
             ).strip()
             if content:
-                return title, content, model_name, token_usage
+                return title, content, model_name
 
-        return "", raw_text, model_name, token_usage
+        return "", raw_text, model_name
 
     def _generate_knowledge_summary_from_session(
         self,
@@ -1221,9 +1247,9 @@ class ChatSessionManager:
         session_id: str,
         session_title: str,
         messages: list[ChatMessage],
-    ) -> dict[str, Any]:
+    ) -> dict[str, str]:
         transcript = self._build_session_knowledge_transcript(messages)
-        generated_title, generated_content, model_name, token_usage = (
+        generated_title, generated_content, model_name = (
             self._summarize_session_experience_with_model(
                 config_path=config_path,
                 session_id=session_id,
@@ -1245,7 +1271,6 @@ class ChatSessionManager:
             "title": title,
             "content": content,
             "model_name": model_name,
-            "token_usage": token_usage,
         }
 
     def create_knowledge_document_from_session(
@@ -1274,24 +1299,6 @@ class ChatSessionManager:
             session_title=session_title,
             messages=messages,
         )
-
-        with self.lock:
-            live_session = self.chat_sessions.get(session_id)
-            if (
-                live_session is not None
-                and live_session.conversation is not None
-                and hasattr(live_session.conversation, "cost_tracker")
-            ):
-                tracker = live_session.conversation.cost_tracker
-                token_usage = summary.get("token_usage", {})
-                if token_usage and hasattr(tracker, "add_usage"):
-                    tracker.add_usage(
-                        input_tokens=token_usage.get("input_tokens", 0),
-                        output_tokens=token_usage.get("output_tokens", 0),
-                        cost=0.0,
-                        label="knowledge_summary",
-                    )
-
         document = self.knowledge_store.create_document(
             target_knowledge_base_id,
             KnowledgeDocumentDraft(

@@ -30,7 +30,7 @@ from .knowledge_store import (
     KnowledgeBaseUpdateDraft,
     KnowledgeDocumentDraft,
 )
-from .interactive import InteractiveApprovalManager, ApprovalScope
+from .interactive import InteractiveApprovalManager
 from .permissions import (
     ToolRiskLevel,
     InteractivePermissionInterceptor,
@@ -449,6 +449,44 @@ def create_app() -> FastAPI:
             "config": safe_dict,
             "timestamp": now_iso(),
         }
+
+    # ── Model routing API ──────────────────────────────────────────
+
+    @app.get("/api/models")
+    async def list_models() -> dict[str, Any]:
+        """List all configured model profiles."""
+        try:
+            profiles = manager.get_model_profiles()
+            return {"profiles": profiles, "timestamp": now_iso()}
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to list models: {exc}"
+            ) from exc
+
+    @app.put("/api/models/active")
+    async def set_active_model(request: Request) -> dict[str, Any]:
+        """Switch the active model profile at runtime."""
+        body = await request.json()
+        profile_name = body.get("profile_name", "").strip()
+        if not profile_name:
+            raise HTTPException(status_code=400, detail="Missing 'profile_name'")
+
+        try:
+            ok = manager.set_active_model(profile_name)
+            if not ok:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unknown profile '{profile_name}'",
+                )
+            return {
+                "ok": True,
+                "active_profile": profile_name,
+                "timestamp": now_iso(),
+            }
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to switch model: {exc}"
+            ) from exc
 
     @app.get("/api/bootstrap")
     async def bootstrap() -> dict[str, Any]:
@@ -955,12 +993,7 @@ def create_app() -> FastAPI:
                 status_code=404,
                 detail=f"Approval request not found: {request_id}",
             )
-        return {
-            "success": True,
-            "request_id": request_id,
-            "approved": payload.approved,
-            "scope": payload.scope,
-        }
+        return {"success": True, "request_id": request_id, "approved": payload.approved}
 
     @app.post("/api/chat/approvals/{request_id}/cancel")
     async def cancel_approval(request_id: str) -> dict[str, Any]:

@@ -236,8 +236,6 @@ class ChatSessionState:
     memory_refresh_revision: int = 0
     is_compacting: bool = False
     mode: str = "auto"
-    stop_reason: str | None = None
-    budget_warning: str | None = None
 
     def last_message_text(self) -> str:
         for message in reversed(self.messages):
@@ -263,8 +261,6 @@ class ChatSessionState:
             "memory_summary": self.memory.handoff.status or self.memory.summary,
             "knowledge_base_ids": list(self.knowledge_base_ids),
             "knowledge_base_count": len(self.knowledge_base_ids),
-            "stop_reason": self.stop_reason,
-            "budget_warning": self.budget_warning,
         }
         # Include token_usage so SSE session.upsert events preserve the count
         if self.conversation is not None and hasattr(self.conversation, "cost_tracker"):
@@ -326,8 +322,6 @@ class ChatSessionState:
             "artifact_dir": self.artifact_dir,
             "error": self.error,
             "mode": self.mode,
-            "stop_reason": self.stop_reason,
-            "budget_warning": self.budget_warning,
             "memory": self.memory.model_dump(),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -357,8 +351,6 @@ class ChatSessionState:
             artifact_dir=payload.get("artifact_dir"),
             error=payload.get("error"),
             mode=str(payload.get("mode") or "auto"),
-            stop_reason=payload.get("stop_reason"),
-            budget_warning=payload.get("budget_warning"),
             memory=LayeredConversationMemory.model_validate(
                 payload.get("memory") or {}
             ),

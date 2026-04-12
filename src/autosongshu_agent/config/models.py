@@ -14,7 +14,27 @@ def _resolve_path(base_dir: Path, raw_path: str) -> str:
     return str(path)
 
 
+class ModelProfileConfig(BaseModel):
+    """A single model profile in the multi-model config."""
+    name: str = "default"
+    display_name: str = ""
+    provider: str = "custom"
+    model_name: str = ""
+    api_key: str | None = None
+    base_url: str | None = None
+    temperature: float = 1.0
+    top_p: float = 0.95
+    max_tokens: int | None = None
+    timeout: float = 120.0
+    stream: bool = True
+    tasks: list[str] = Field(default_factory=lambda: ["general"])
+    enabled: bool = True
+    cost_per_1m_input: float = 0.0
+    cost_per_1m_output: float = 0.0
+
+
 class ModelConfig(BaseModel):
+    # ── Legacy single-model fields (backward compatible) ──
     model_name: str = "gpt-4.1-mini"
     api_key: str | None = None
     base_url: str | None = None
@@ -27,6 +47,13 @@ class ModelConfig(BaseModel):
         default_factory=list,
         description="List of fallback model names to try when the primary model fails "
                     "(e.g. on 429/500/503 errors).",
+    )
+
+    # ── Multi-model fields ──
+    active: str | None = None
+    profiles: list[ModelProfileConfig] = Field(
+        default_factory=list,
+        description="List of model profiles for multi-model routing.",
     )
 
 

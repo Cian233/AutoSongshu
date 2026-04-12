@@ -62,6 +62,9 @@ interface SessionActions {
   /** Remove deleted message IDs from a session */
   removeMessages: (sessionId: string, deletedIds: string[]) => void;
 
+  /** Mark messages as compacted (kept for display, hidden from model) */
+  compactMessages: (sessionId: string, messageIds: string[]) => void;
+
   /** Set the submitting state */
   setSubmitting: (value: boolean) => void;
 
@@ -198,6 +201,25 @@ export const useSessionStore = create<SessionState & SessionActions>(
           (msg) => !removedSet.has(String(msg.id)),
         );
         sessionDetails.set(sessionId, { ...detail, messages: filtered });
+        return { sessionDetails };
+      });
+    },
+
+    compactMessages: (sessionId, messageIds) => {
+      if (!messageIds.length) return;
+      set((state) => {
+        const sessionDetails = new Map(state.sessionDetails);
+        const detail = sessionDetails.get(sessionId);
+        if (!detail || !Array.isArray(detail.messages)) {
+          return state;
+        }
+        const compactedSet = new Set(messageIds.map(String));
+        const updated = detail.messages.map((msg) =>
+          compactedSet.has(String(msg.id))
+            ? { ...msg, compacted: true }
+            : msg,
+        );
+        sessionDetails.set(sessionId, { ...detail, messages: updated });
         return { sessionDetails };
       });
     },

@@ -66,7 +66,7 @@ export function useSSE() {
   const {
     upsertSessionSummary,
     upsertMessage: storeUpsertMessage,
-    removeMessages,
+    compactMessages,
     setFindings,
     upsertStep,
     setProgress,
@@ -349,7 +349,7 @@ export function useSSE() {
       ) {
         return;
       }
-      removeMessages(sessionId, deletedIds);
+      compactMessages(sessionId, deletedIds);
     });
 
     // ── finding.upsert ──
@@ -415,7 +415,7 @@ export function useSSE() {
     setEventSource,
     upsertSessionSummary,
     storeUpsertMessage,
-    removeMessages,
+    compactMessages,
     setFindings,
     upsertStep,
     setProgress,

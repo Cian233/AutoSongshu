@@ -17,14 +17,6 @@ from .url import (
     safe_host_from_url,
 )
 
-# New utilities from claw-code refactoring
-from .lazy_schema import LazySchema, lazy_schema
-from .denial_tracking import (
-    DenialTracking,
-    get_global_denial_tracking,
-    reset_global_denial_tracking,
-)
-
 __all__ = [
     "_should_track_loop_guard_tool",
     "ABSOLUTE_URL_PATTERN",
@@ -47,10 +39,4 @@ __all__ = [
     "tool_call_signature",
     "tool_result_signature",
     "truncate_text",
-    # New utilities
-    "LazySchema",
-    "lazy_schema",
-    "DenialTracking",
-    "get_global_denial_tracking",
-    "reset_global_denial_tracking",
 ]
