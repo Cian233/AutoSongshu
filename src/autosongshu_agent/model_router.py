@@ -79,6 +79,9 @@ class ModelProfile:
     # Is this profile enabled?
     enabled: bool = True
 
+    # Per-profile compaction overrides (None = use global defaults)
+    compaction: dict[str, Any] | None = None
+
     def __post_init__(self) -> None:
         if not self.display_name:
             self.display_name = self.name
@@ -111,7 +114,7 @@ class ModelProfile:
         }
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "name": self.name,
             "display_name": self.display_name,
             "provider": self.provider.value,
@@ -125,6 +128,9 @@ class ModelProfile:
             "cost_per_1m_input": self.cost_per_1m_input,
             "cost_per_1m_output": self.cost_per_1m_output,
         }
+        if self.compaction:
+            d["compaction"] = self.compaction
+        return d
 
 
 # ── Model router ──────────────────────────────────────────────────
@@ -347,6 +353,7 @@ def _parse_single_profile(raw: dict[str, Any]) -> ModelProfile:
         latency_ms=int(raw.get("latency_ms", 0)),
         tasks=tasks,
         enabled=bool(raw.get("enabled", True)),
+        compaction=raw.get("compaction") if isinstance(raw.get("compaction"), dict) else None,
     )
 
 

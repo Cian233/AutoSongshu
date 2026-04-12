@@ -24,10 +24,16 @@ export const API_ENDPOINTS = {
   KNOWLEDGE_BASES: "/api/knowledge/bases",
   /** Get / set chat configuration */
   CONFIG: "/api/chat/config",
+  /** Update chat configuration (compaction, etc.) */
+  CONFIG_UPDATE: "/api/chat/config",
   /** Hot-reload chat configuration */
   CONFIG_RELOAD: "/api/chat/config/reload",
   /** List model profiles */
   MODELS: "/api/models",
+  /** Add a model profile */
+  MODELS_ADD: "/api/models",
+  /** Update a model profile (including compaction) */
+  MODELS_UPDATE: (name: string) => `/api/models/${encodeURIComponent(name)}`,
   /** Set active model profile */
   MODELS_ACTIVE: "/api/models/active",
 } as const;

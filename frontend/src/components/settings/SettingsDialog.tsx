@@ -15,6 +15,8 @@ import {
   Cpu,
   Sliders,
   Check,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { fetchJson } from "../../lib/api";
@@ -23,7 +25,7 @@ import { useUIStore } from "../../stores/use-ui-store";
 import { useAuthorizationStore } from "../../stores/use-authorization-store";
 import { useKnowledgeStore } from "../../stores/use-knowledge-store";
 import { useModelStore } from "../../stores/use-model-store";
-import type { ModelProfile } from "../../stores/use-model-store";
+import type { ModelProfile, NewProfileInput } from "../../stores/use-model-store";
 import { normalizeLines } from "../../lib/utils";
 import type { AuthorizationRecord, AuthorizationDraft } from "../../types/authorization";
 
@@ -75,8 +77,12 @@ export const SettingsDialog: React.FC = () => {
     profiles,
     activeProfile,
     isLoading: modelsLoading,
+    isSaving: modelsSaving,
     fetchProfiles,
     setActiveProfile,
+    addProfile,
+    deleteProfile,
+    updateProfile,
   } = useModelStore();
 
   // ── Local state ───────────────────────────────────────────────
@@ -321,8 +327,12 @@ export const SettingsDialog: React.FC = () => {
               profiles={profiles}
               activeProfile={activeProfile}
               isLoading={modelsLoading}
+              isSaving={modelsSaving}
               switchingModel={switchingModel}
               onSwitch={handleSwitchModel}
+              onAdd={addProfile}
+              onDelete={deleteProfile}
+              onUpdate={updateProfile}
             />
           )}
 
@@ -403,19 +413,115 @@ export const SettingsDialog: React.FC = () => {
 
 // ── Models Tab ───────────────────────────────────────────────────
 
+const ALL_TASKS = [
+  "reasoning", "memory", "search", "tool_planning", "code_gen", "knowledge", "general",
+];
+
+const COMPACTION_FIELDS = [
+  { key: "compact_after_tokens", label: "触发 Token 数", hint: "上下文超过此值触发压缩", min: 1000, max: 2000000 },
+  { key: "compact_after_turns", label: "触发轮数", hint: "对话轮数超过此值触发压缩", min: 2, max: 100 },
+  { key: "context_window_tokens", label: "上下文窗口", hint: "模型上下文窗口大小 (Token)", min: 8000, max: 2000000 },
+  { key: "keep_last_turns", label: "保留最后轮数", hint: "压缩后保留最后几轮完整对话", min: 1, max: 20 },
+  { key: "min_turns", label: "最少轮数", hint: "至少多少轮后才允许压缩", min: 1, max: 50 },
+];
+
 function ModelsTab({
   profiles,
   activeProfile,
   isLoading,
+  isSaving,
   switchingModel,
   onSwitch,
+  onAdd,
+  onDelete,
+  onUpdate,
 }: {
   profiles: ModelProfile[];
   activeProfile: string | null;
   isLoading: boolean;
+  isSaving: boolean;
   switchingModel: string | null;
   onSwitch: (name: string) => Promise<void>;
+  onAdd: (input: NewProfileInput) => Promise<boolean>;
+  onDelete: (name: string) => Promise<boolean>;
+  onUpdate: (name: string, patch: Record<string, unknown>) => Promise<boolean>;
 }) {
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [expandedProfile, setExpandedProfile] = useState<string | null>(null);
+  const [compactionEdits, setCompactionEdits] = useState<Record<string, Record<string, number | boolean>>>({});
+  const [newProfile, setNewProfile] = useState<NewProfileInput>({
+    name: "",
+    model_name: "",
+    provider: "custom",
+    base_url: "",
+    api_key: "",
+    temperature: 1.0,
+    top_p: 0.95,
+    tasks: ["general"],
+  });
+  const [addError, setAddError] = useState("");
+
+  const inputCls = cn(
+    "w-full rounded-md border border-[var(--line)] bg-[var(--bg)] px-3 py-2",
+    "text-sm text-[var(--text)] placeholder:text-[var(--muted)]",
+    "focus:outline-none focus:ring-2 focus:ring-[var(--accent)]",
+  );
+
+  const handleAdd = useCallback(async () => {
+    if (!newProfile.name.trim() || !newProfile.model_name.trim()) {
+      setAddError("名称和模型 ID 为必填项");
+      return;
+    }
+    setAddError("");
+    const ok = await onAdd(newProfile);
+    if (ok) {
+      setShowAddForm(false);
+      setNewProfile({
+        name: "", model_name: "", provider: "custom",
+        base_url: "", api_key: "", temperature: 1.0, top_p: 0.95,
+        tasks: ["general"],
+      });
+    } else {
+      setAddError("添加失败，请检查名称是否重复");
+    }
+  }, [newProfile, onAdd]);
+
+  const handleDelete = useCallback(
+    async (name: string) => {
+      if (!confirm(`确定删除模型配置「${name}」？`)) return;
+      await onDelete(name);
+    },
+    [onDelete],
+  );
+
+  const toggleTask = useCallback((task: string) => {
+    setNewProfile((prev) => {
+      const tasks = new Set(prev.tasks || []);
+      if (tasks.has(task)) tasks.delete(task);
+      else tasks.add(task);
+      return { ...prev, tasks: Array.from(tasks) };
+    });
+  }, []);
+
+  const handleSaveCompaction = useCallback(async (profileName: string) => {
+    const edits = compactionEdits[profileName];
+    if (!edits) return;
+    const ok = await onUpdate(profileName, { compaction: edits });
+    if (ok) {
+      setCompactionEdits((prev) => {
+        const next = { ...prev };
+        delete next[profileName];
+        return next;
+      });
+    }
+  }, [compactionEdits, onUpdate]);
+
+  const getCompactionValue = useCallback((profile: ModelProfile, key: string, fallback: number) => {
+    const edit = compactionEdits[profile.name]?.[key];
+    if (edit !== undefined) return edit as number;
+    return (profile.compaction?.[key] as number) ?? fallback;
+  }, [compactionEdits]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12 text-[var(--muted)] text-sm">
@@ -424,103 +530,298 @@ function ModelsTab({
     );
   }
 
-  if (profiles.length === 0) {
-    return (
-      <div className="space-y-4">
-        <p className="text-sm text-[var(--muted)]">
-          当前使用单模型配置。要启用多模型切换，请在 YAML 配置文件中添加
-          <code className="mx-1 rounded bg-[var(--bg)] px-1.5 py-0.5 text-xs">
-            model.profiles
-          </code>
-          。
-        </p>
-        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-4 space-y-2">
-          <p className="text-xs text-[var(--muted)]">
-            示例配置（configs/pentest.example.yaml）：
-          </p>
-          <pre className="text-xs text-[var(--text)] overflow-x-auto whitespace-pre">
-{`model:
-  active: qwen-plus
-  profiles:
-    - name: qwen-plus
-      provider: dashscope
-      model_name: qwen3.6-plus
-      api_key: \${AUTOSONGSHU_MODEL_API_KEY}
-      base_url: \${AUTOSONGSHU_MODEL_BASE_URL}
-      tasks: [reasoning, general]
-    - name: deepseek
-      provider: deepseek
-      model_name: deepseek-chat
-      api_key: \${DEEPSEEK_API_KEY}
-      base_url: https://api.deepseek.com/v1
-      tasks: [code_gen, search]`}
-          </pre>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-[var(--muted)]">
-        选择当前会话使用的模型。切换后立即生效，新消息将使用所选模型。
-      </p>
-      {profiles.map((profile) => {
-        const isActive = profile.name === activeProfile;
-        const isSwitching = profile.name === switchingModel;
-        return (
-          <button
-            key={profile.name}
-            type="button"
-            className={cn(
-              "w-full flex items-center gap-4 rounded-lg border p-4 text-left transition-all",
-              isActive
-                ? "border-[var(--accent)] bg-[var(--accent)]/5"
-                : "border-[var(--line)] hover:border-[var(--muted)] hover:bg-[var(--bg)]",
-            )}
-            onClick={() => onSwitch(profile.name)}
-            disabled={isSwitching}
-          >
-            {/* Active indicator */}
-            <div
-              className={cn(
-                "flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center",
-                isActive ? "border-[var(--accent)]" : "border-[var(--muted)]",
-              )}
+    <div className="space-y-4">
+      {/* Header with add button */}
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-[var(--muted)]">
+          {profiles.length > 0
+            ? "点击切换模型，新消息将使用所选模型。"
+            : "尚未配置模型，点击右侧按钮添加。"}
+        </p>
+        <button
+          type="button"
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium",
+            "border border-[var(--line)] text-[var(--text)]",
+            "hover:bg-[var(--sidebar-hover)] transition-colors",
+            showAddForm && "bg-[var(--sidebar-hover)]",
+          )}
+          onClick={() => { setShowAddForm(!showAddForm); setAddError(""); }}
+          disabled={isSaving}
+        >
+          <Plus className="w-3.5 h-3.5" />
+          添加模型
+        </button>
+      </div>
+
+      {/* Add form */}
+      {showAddForm && (
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-[var(--text)]">名称 *</span>
+              <input
+                type="text"
+                value={newProfile.name}
+                onChange={(e) => setNewProfile((p) => ({ ...p, name: e.target.value }))}
+                placeholder="my-model"
+                className={inputCls}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-[var(--text)]">模型 ID *</span>
+              <input
+                type="text"
+                value={newProfile.model_name}
+                onChange={(e) => setNewProfile((p) => ({ ...p, model_name: e.target.value }))}
+                placeholder="gpt-4o / deepseek-chat"
+                className={inputCls}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-[var(--text)]">Provider</span>
+              <select
+                value={newProfile.provider}
+                onChange={(e) => setNewProfile((p) => ({ ...p, provider: e.target.value }))}
+                className={inputCls}
+              >
+                {Object.entries(PROVIDER_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-[var(--text)]">显示名称</span>
+              <input
+                type="text"
+                value={newProfile.display_name || ""}
+                onChange={(e) => setNewProfile((p) => ({ ...p, display_name: e.target.value || undefined }))}
+                placeholder="留空则使用名称"
+                className={inputCls}
+              />
+            </label>
+            <label className="space-y-1 col-span-2">
+              <span className="text-xs font-medium text-[var(--text)]">Base URL</span>
+              <input
+                type="text"
+                value={newProfile.base_url || ""}
+                onChange={(e) => setNewProfile((p) => ({ ...p, base_url: e.target.value || undefined }))}
+                placeholder="https://api.openai.com/v1"
+                className={inputCls}
+              />
+            </label>
+            <label className="space-y-1 col-span-2">
+              <span className="text-xs font-medium text-[var(--text)]">API Key</span>
+              <input
+                type="password"
+                value={newProfile.api_key || ""}
+                onChange={(e) => setNewProfile((p) => ({ ...p, api_key: e.target.value || undefined }))}
+                placeholder="sk-..."
+                className={inputCls}
+              />
+            </label>
+          </div>
+
+          {/* Task selection */}
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium text-[var(--text)]">适用任务</span>
+            <div className="flex flex-wrap gap-1.5">
+              {ALL_TASKS.map((task) => {
+                const selected = (newProfile.tasks || []).includes(task);
+                return (
+                  <button
+                    key={task}
+                    type="button"
+                    className={cn(
+                      "text-xs px-2 py-1 rounded-md border transition-colors",
+                      selected
+                        ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                        : "border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]",
+                    )}
+                    onClick={() => toggleTask(task)}
+                  >
+                    {task}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Error + Actions */}
+          {addError && (
+            <p className="text-xs text-red-500">{addError}</p>
+          )}
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              className="text-xs text-[var(--muted)] hover:text-[var(--text)]"
+              onClick={() => setShowAddForm(false)}
             >
-              {isActive && <Check className="w-3 h-3 text-[var(--accent)]" />}
-            </div>
+              取消
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium",
+                "bg-[var(--accent)] text-white hover:opacity-90",
+                "disabled:opacity-50",
+              )}
+              onClick={handleAdd}
+              disabled={isSaving || !newProfile.name.trim() || !newProfile.model_name.trim()}
+            >
+              {isSaving ? "保存中..." : "确认添加"}
+            </button>
+          </div>
+        </div>
+      )}
 
-            {/* Profile info */}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-[var(--text)] truncate">
-                  {profile.display_name}
-                </span>
-                <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--bg)] text-[var(--muted)]">
-                  {PROVIDER_LABELS[profile.provider] || profile.provider}
-                </span>
-              </div>
-              <div className="flex items-center gap-3 mt-1 text-xs text-[var(--muted)]">
-                <span className="truncate">{profile.model_name}</span>
-                {profile.temperature !== 1.0 && (
-                  <span>temp {profile.temperature}</span>
+      {/* Profile list */}
+      {profiles.length === 0 && !showAddForm ? (
+        <div className="text-center py-8 text-sm text-[var(--muted)]">
+          暂无模型配置，点击上方「添加模型」开始。
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {profiles.map((profile) => {
+            const isActive = profile.name === activeProfile;
+            const isSwitching = profile.name === switchingModel;
+            const isExpanded = expandedProfile === profile.name;
+            const hasEdits = !!compactionEdits[profile.name];
+            return (
+              <div
+                key={profile.name}
+                className={cn(
+                  "rounded-lg border transition-all",
+                  isActive
+                    ? "border-[var(--accent)] bg-[var(--accent)]/5"
+                    : "border-[var(--line)] hover:border-[var(--muted)]",
                 )}
-                {profile.tasks.length > 0 && (
-                  <span className="truncate">
-                    {profile.tasks.join(", ")}
-                  </span>
-                )}
-              </div>
-            </div>
+              >
+                {/* Main row */}
+                <div className="flex items-center gap-3 p-3">
+                  <button
+                    type="button"
+                    className="flex-1 flex items-center gap-3 text-left min-w-0"
+                    onClick={() => onSwitch(profile.name)}
+                    disabled={isSwitching}
+                  >
+                    <div
+                      className={cn(
+                        "flex-shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center",
+                        isActive ? "border-[var(--accent)]" : "border-[var(--muted)]",
+                      )}
+                    >
+                      {isActive && <Check className="w-2.5 h-2.5 text-[var(--accent)]" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-[var(--text)] truncate">
+                          {profile.display_name}
+                        </span>
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--bg)] text-[var(--muted)]">
+                          {PROVIDER_LABELS[profile.provider] || profile.provider}
+                        </span>
+                        {profile.compaction && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400">
+                            自定义压缩
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 mt-0.5 text-xs text-[var(--muted)]">
+                        <span className="truncate">{profile.model_name}</span>
+                        {profile.tasks.length > 0 && (
+                          <span className="truncate">{profile.tasks.join(", ")}</span>
+                        )}
+                      </div>
+                    </div>
+                    {isSwitching && (
+                      <RefreshCw className="h-3.5 w-3.5 text-[var(--muted)] animate-spin flex-shrink-0" />
+                    )}
+                  </button>
 
-            {/* Switching spinner */}
-            {isSwitching && (
-              <RefreshCw className="h-4 w-4 text-[var(--muted)] animate-spin flex-shrink-0" />
-            )}
-          </button>
-        );
-      })}
+                  {/* Expand compaction */}
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex-shrink-0 p-1.5 rounded-md text-[var(--muted)]",
+                      "hover:text-[var(--text)] hover:bg-[var(--sidebar-hover)]",
+                      "transition-colors",
+                      isExpanded && "text-[var(--accent)]",
+                    )}
+                    onClick={(e) => { e.stopPropagation(); setExpandedProfile(isExpanded ? null : profile.name); }}
+                    title="上下文压缩设置"
+                  >
+                    <Sliders className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Delete */}
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex-shrink-0 p-1.5 rounded-md text-[var(--muted)]",
+                      "hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20",
+                      "transition-colors",
+                    )}
+                    onClick={(e) => { e.stopPropagation(); handleDelete(profile.name); }}
+                    title="删除此模型"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* Expanded compaction settings */}
+                {isExpanded && (
+                  <div className="border-t border-[var(--line)] px-4 py-3 space-y-2 bg-[var(--bg)]/50">
+                    <p className="text-xs text-[var(--muted)]">
+                      上下文压缩设置（留空使用全局默认值，修改后点击保存）
+                    </p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                      {COMPACTION_FIELDS.map((field) => (
+                        <label key={field.key} className="flex items-center justify-between gap-2">
+                          <span className="text-xs text-[var(--text)] whitespace-nowrap">{field.label}</span>
+                          <input
+                            type="number"
+                            value={getCompactionValue(profile, field.key, 0) || ""}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value);
+                              if (!isNaN(val)) {
+                                setCompactionEdits((prev) => ({
+                                  ...prev,
+                                  [profile.name]: { ...(prev[profile.name] || {}), [field.key]: val },
+                                }));
+                              }
+                            }}
+                            placeholder="默认"
+                            min={field.min}
+                            max={field.max}
+                            className={cn(inputCls, "w-24 text-right text-xs")}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        className={cn(
+                          "text-xs px-3 py-1 rounded-md font-medium transition-colors",
+                          hasEdits
+                            ? "bg-[var(--accent)] text-white hover:opacity-90"
+                            : "bg-[var(--line)] text-[var(--muted)]",
+                        )}
+                        onClick={() => handleSaveCompaction(profile.name)}
+                        disabled={!hasEdits || isSaving}
+                      >
+                        {isSaving ? "保存中..." : "保存压缩设置"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

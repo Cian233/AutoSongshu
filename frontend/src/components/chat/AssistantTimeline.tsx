@@ -35,6 +35,11 @@ type TimelineItem =
       key: string;
       part: TextPart;
       index: number;
+    }
+  | {
+      type: "image";
+      key: string;
+      part: { type: "image"; url: string };
     };
 
 // ── Build timeline items ─────────────────────────────────────────
@@ -148,6 +153,15 @@ function buildAssistantTimelineItems(message: Message): TimelineItem[] {
       continue;
     }
 
+    if (part.type === "image") {
+      items.push({
+        type: "image",
+        key: assistantPartKey(message?.id, "image", items.length),
+        part: part as { type: "image"; url: string },
+      });
+      continue;
+    }
+
     // Default: output text
     items.push({
       type: "output",
@@ -200,6 +214,19 @@ function AssistantTimelineInner({ message }: AssistantTimelineProps) {
               partKey={item.key}
               defaultOpen={defaultOpen}
             />
+          );
+        }
+
+        if (item.type === "image") {
+          return (
+            <div key={item.key} className="my-2 rounded-lg overflow-hidden border border-[var(--line)]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={item.part.url}
+                alt="Screenshot"
+                className="max-w-full max-h-[400px] object-contain bg-[var(--bg)]"
+              />
+            </div>
           );
         }
 

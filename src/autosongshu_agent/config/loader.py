@@ -333,6 +333,113 @@ def reload_config(path: str | Path) -> AppConfig:
             ) from exc
 
 
+def save_config(path: str | Path, config: AppConfig) -> None:
+    """Persist an ``AppConfig`` back to a YAML file.
+
+    This performs a **shallow merge**: the raw YAML dict currently on disk
+    is loaded, the ``model`` section is replaced with the serialised form of
+    ``config.model``, and the result is written back.  All other top-level
+    sections (agent, sandbox, skills, …) are left untouched.
+
+    Sensitive fields (``api_key``) that were originally stored as
+    ``${ENV_VAR}`` references are preserved as-is when the value has not
+    changed.
+
+    Args:
+        path: Path to the YAML configuration file.
+        config: The ``AppConfig`` to persist.
+    """
+    config_path = Path(path).resolve()
+
+    # Read existing raw YAML
+    existing_raw: dict[str, Any] = {}
+    if config_path.exists():
+        try:
+            existing_raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            existing_raw = {}
+
+    # Build the model section to write
+    model = config.model
+    model_dict: dict[str, Any] = {}
+
+    # Preserve env-var references for api_key if the current value matches
+    existing_model = existing_raw.get("model", {})
+    _preserve_env_ref(model_dict, existing_model, "api_key", model.api_key)
+
+    model_dict["model_name"] = model.model_name
+    if model.base_url:
+        _preserve_env_ref(model_dict, existing_model, "base_url", model.base_url)
+    model_dict["temperature"] = model.temperature
+    model_dict["top_p"] = model.top_p
+    if model.max_tokens is not None:
+        model_dict["max_tokens"] = model.max_tokens
+    model_dict["timeout"] = model.timeout
+    model_dict["stream"] = model.stream
+    if model.fallbacks:
+        model_dict["fallbacks"] = model.fallbacks
+
+    # Multi-model fields
+    if model.active:
+        model_dict["active"] = model.active
+    if model.profiles:
+        model_dict["profiles"] = model.profiles
+
+    # Merge into existing config
+    existing_raw["model"] = model_dict
+
+    # Persist compaction section if non-default values exist
+    compaction = config.compaction
+    compaction_dict: dict[str, Any] = {}
+    _COMPACTION_DEFAULTS = {
+        "auto": True, "prune": True, "trigger_chars": 18000,
+        "reserved_chars": 4000, "min_turns": 4, "retain_recent_turns": 2,
+        "context_window_tokens": 128000, "reserved_tokens": 8000,
+        "compact_after_tokens": 90000, "compact_after_turns": 12,
+        "keep_first_turns": 1, "keep_last_turns": 4, "use_token_counting": True,
+    }
+    for key, default in _COMPACTION_DEFAULTS.items():
+        val = getattr(compaction, key, default)
+        if val != default:
+            compaction_dict[key] = val
+    if compaction_dict:
+        existing_raw["compaction"] = compaction_dict
+    elif "compaction" in existing_raw:
+        # Keep existing compaction section if we have nothing to change
+        pass
+
+    # Write back
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with _config_lock:
+        config_path.write_text(
+            yaml.dump(existing_raw, default_flow_style=False, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        # Update cache
+        _config_cache[str(config_path)] = config
+        logger.info("Configuration saved to %s", config_path)
+
+
+def _preserve_env_ref(
+    target: dict[str, Any],
+    source: dict[str, Any],
+    key: str,
+    current_value: str | None,
+) -> None:
+    """If *source[key]* is an ``${ENV_VAR}`` reference and the resolved
+    value matches *current_value*, keep the reference instead of the
+    plain value."""
+    raw_val = source.get(key)
+    if isinstance(raw_val, str) and raw_val.startswith("${") and raw_val.endswith("}"):
+        env_var = raw_val[2:-1]
+        env_val = os.environ.get(env_var)
+        if env_val and current_value and env_val == current_value:
+            target[key] = raw_val
+            return
+    if current_value is not None:
+        target[key] = current_value
+
+
 def get_cached_config(path: str | Path) -> AppConfig | None:
     """Return the cached config for *path* if available, without re-reading disk."""
     key = str(Path(path).resolve())
@@ -343,6 +450,7 @@ def get_cached_config(path: str | Path) -> AppConfig | None:
 __all__ = [
     "load_config",
     "load_project_env",
+    "save_config",
     "_ENV_ONLY_PATTERN",
     "_TRUE_VALUES",
     "_FALSE_VALUES",

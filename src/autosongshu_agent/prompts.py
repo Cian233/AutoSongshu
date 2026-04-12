@@ -58,7 +58,7 @@ def build_system_prompt(config: AppConfig, project_root: Path | None = None) -> 
 
 | 子组 | 工具 | 何时激活 |
 |------|------|----------|
-| `browser-basic` | navigate, snapshot, screenshot, get_html, status, wait_for_load_state, wait_for_selector, list_forms | **默认激活** |
+| `browser-basic` | navigate, snapshot, screenshot, get_html, status, wait_for_load_state, wait_for_selector, list_forms, **view_image** | **默认激活** |
 | `browser-interact` | click, fill, press, hover, select_option, go_back, go_forward, upload_file, wait_for_url | **默认激活** |
 | `browser-inspect` | get_element, list_links, storage_snapshot, get/set/clear_cookies, scroll_to, extract_route_hints | 需要检查 Cookie、Storage、特定元素时 |
 | `browser-network` | get_network_log, get_cdp_requests, get_response_bodies, analyze_page_resources, get_console_log | 需要分析网络流量、API 调用时 |
@@ -123,6 +123,7 @@ def build_system_prompt(config: AppConfig, project_root: Path | None = None) -> 
 </tool_usage_policy>
 
 <information_gathering>
+- 截图（`screenshot`）仅保存文件到磁盘并返回路径。如果你需要**查看图片内容**（分析页面布局、验证 UI 渲染、检查验证码等），必须额外调用 `view_image` 并传入截图路径。不要假设你能看到截图——`screenshot` 的返回结果只是文件路径字符串。
 - 绝不要止步于截图、表单和链接。在每个关键页面上，检查加载的资源：HTML、内联脚本、外部 JS、CSS、iframe、manifest，以及通过 performance 或 CDP 数据可见的任何内容。
 - 分析动态请求时，检查完整信息：方法、URL、查询参数、请求头、Cookie、postData、发起者、重定向链、响应状态、响应头、MIME 类型和响应体预览。
 </information_gathering>

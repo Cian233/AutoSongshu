@@ -7,7 +7,7 @@ from agentscope.tool import ToolResponse
 from ..discovery import extract_in_scope_candidate_urls, is_api_like_url, prioritize_discovery_urls
 from ..runtime import PentestRuntime
 from .registry import registry
-from .utils import _error_response, _parse_json_object, _tool_response
+from .utils import _error_response, _image_response, _parse_json_object, _tool_response
 
 # ── Tool Groups ───────────────────────────────────────────────────
 # Split into 5 sub-groups following OpenClaw's tool profile pattern.
@@ -105,6 +105,11 @@ def browser_screenshot(runtime: PentestRuntime, name: str = "page") -> ToolRespo
         return _tool_response({"path": runtime.browser.screenshot(name=name)})
     except Exception as exc:
         return _error_response(exc)
+
+@registry.register("browser-basic", dedupe=False)
+def view_image(runtime: PentestRuntime, path: str) -> ToolResponse:
+    """Load and view an image file (screenshot, downloaded image, etc.). The image will be sent to the model as a base64-encoded visual so you can analyze its content. Only call this tool when you actually need to *see* the image content -- do not use it just to confirm a file exists."""
+    return _image_response(path, description=f"Image: {path}")
 
 @registry.register("browser-basic", dedupe=False)
 def browser_wait_for_load_state(runtime: PentestRuntime, state: str = "networkidle", timeout_ms: int = 5000) -> ToolResponse:

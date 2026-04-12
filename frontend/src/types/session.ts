@@ -67,7 +67,12 @@ export interface ToolResultPart {
   content: TextPart[];
 }
 
-export type MessagePart = TextPart | ReasoningPart | ToolCallPart | ToolResultPart;
+export interface ImagePart {
+  type: "image";
+  url: string;
+}
+
+export type MessagePart = TextPart | ReasoningPart | ToolCallPart | ToolResultPart | ImagePart;
 
 // ── Tool Call / Result (legacy aliases) ─────────────────────────
 

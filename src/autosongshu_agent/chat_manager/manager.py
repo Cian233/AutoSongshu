@@ -117,6 +117,11 @@ class ChatSessionManager:
         self.executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="autosongshu-chat"
         )
+        # Dedicated single-thread executor for compaction so it never
+        # competes with conversation processing for the shared pool.
+        self._compaction_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="autosongshu-compact"
+        )
         self.lock = threading.RLock()
         self.chat_sessions: dict[str, ChatSessionState] = {}
         self.counter = 0
@@ -544,21 +549,30 @@ class ChatSessionManager:
             order_index=0,
         )
 
-        # Mark old messages as compacted instead of deleting them
+        # --- Critical section: only mutate in-memory state under the lock ---
         compacted_ids: list[str] = []
-        for msg in messages_to_compact:
-            msg.compacted = True
-            compacted_ids.append(msg.id)
-            self._persist_message(session.session_id, msg)
+        persist_tasks: list[tuple[str, ChatMessage]] = []  # (session_id, msg)
 
-        # Prepend the system summary message
-        session.messages = [system_message] + session.messages
+        with self.lock:
+            for msg in messages_to_compact:
+                msg.compacted = True
+                compacted_ids.append(msg.id)
+                persist_tasks.append((session.session_id, msg))
 
-        # Update order index
-        for i, msg in enumerate(session.messages):
-            msg.order_index = i + 1
-            if msg.id == system_message.id:
-                self._persist_message(session.session_id, msg)
+            # Prepend the system summary message
+            session.messages = [system_message] + session.messages
+
+            # Update order index
+            for i, msg in enumerate(session.messages):
+                msg.order_index = i + 1
+            persist_tasks.append((session.session_id, system_message))
+
+        # --- Persist outside the lock (disk I/O should not block other ops) ---
+        for sid, msg in persist_tasks:
+            try:
+                self._persist_message(sid, msg)
+            except Exception as exc:
+                logger.warning("Failed to persist message %s: %s", msg.id, exc)
 
         return compacted_ids
 
@@ -590,7 +604,12 @@ class ChatSessionManager:
                 deleted_ids = self._apply_physical_compaction(
                     session, job.anchor_message_id, updated_memory
                 )
+
+            # Persist outside the lock (disk I/O)
+            try:
                 self._persist_session_state(session)
+            except Exception as exc:
+                logger.warning("Failed to persist session state after compaction: %s", exc)
 
             # Notify frontend about compaction results
             self._emit_session(session)
@@ -619,23 +638,36 @@ class ChatSessionManager:
                     session.is_compacting = False
 
     def _wait_for_pending_cleanup(self, session_id: str) -> None:
-        cleanup_future: Future[Any] | None = None
+        """Check if a previous compaction is still running.
+
+        Unlike the old blocking implementation, this method does **not**
+        wait for the compaction to finish.  Compaction runs on a dedicated
+        thread and is purely deterministic (no LLM calls), so it completes
+        quickly.  If it is still in progress we simply clear the stale
+        future and proceed — the next turn will trigger a fresh compaction
+        if the context is still over budget.
+        """
         with self.lock:
             session = self.chat_sessions.get(session_id)
             if session is None:
                 return
             cleanup_future = session.cleanup_future
-        if cleanup_future is None:
-            return
-        if cleanup_future.done():
-            with self.lock:
-                session = self.chat_sessions.get(session_id)
-                if session is not None and session.cleanup_future is cleanup_future:
-                    session.cleanup_future = None
-                    session.is_compacting = False
-            return
-        with contextlib.suppress(Exception):
-            cleanup_future.result()
+            if cleanup_future is None:
+                return
+            if cleanup_future.done():
+                session.cleanup_future = None
+                session.is_compacting = False
+            else:
+                # Compaction still running — cancel it and proceed.
+                # It will be re-triggered after this turn if needed.
+                cleanup_future.cancel()
+                session.cleanup_future = None
+                session.is_compacting = False
+                logger.debug(
+                    "Cancelled in-progress compaction for session %s "
+                    "to avoid blocking the new turn.",
+                    session_id,
+                )
 
     def _recover_interrupted_session(self, session: ChatSessionState) -> bool:
         recovered = False
@@ -708,6 +740,22 @@ class ChatSessionManager:
         if session.skill_dirs:
             config.skills.directories.extend(session.skill_dirs)
         config.agent.mode = session.mode
+
+        # Apply per-profile compaction overrides: if the active model
+        # profile defines a ``compaction`` dict, merge it into the
+        # global compaction config so that each model can have its own
+        # context budget.
+        active_name = getattr(config.model, "active", None)
+        if active_name and config.model.profiles:
+            for profile in config.model.profiles:
+                if isinstance(profile, dict) and profile.get("name") == active_name:
+                    profile_compaction = profile.get("compaction")
+                    if isinstance(profile_compaction, dict):
+                        for key, value in profile_compaction.items():
+                            if hasattr(config.compaction, key):
+                                setattr(config.compaction, key, value)
+                    break
+
         permission_interceptor = None
         if self._permission_interceptor_factory is not None:
             permission_interceptor = self._permission_interceptor_factory(
@@ -851,6 +899,18 @@ class ChatSessionManager:
                     if session.model_router.set_active(profile_name):
                         switched = True
         return switched
+
+    def _refresh_model_routers(self, config) -> None:
+        """Rebuild ModelRouter instances in all active sessions after config change."""
+        from ..model_router import parse_profiles_from_config, ModelRouter
+        profiles = parse_profiles_from_config(config.model)
+        with self.lock:
+            for session in self.chat_sessions.values():
+                if hasattr(session, "_model_router"):
+                    session._model_router = ModelRouter(
+                        profiles=profiles,
+                        default_profile_name=getattr(config.model, "active", None),
+                    )
 
     def interrupt_session(self, session_id: str) -> dict[str, Any]:
         with self.lock:
@@ -1442,7 +1502,7 @@ class ChatSessionManager:
                 assistant_message.status = "in_progress"
                 session.messages.extend([user_message, assistant_message])
                 session.status = "running"
-                session.future = self.executor.submit(
+                session.future = self._compaction_executor.submit(
                     self._process_slash_compact, session_id, assistant_message.id
                 )
             else:
@@ -1810,7 +1870,7 @@ class ChatSessionManager:
                         session.cleanup_future = None
                         session.is_compacting = False
                     else:
-                        session.cleanup_future = self.executor.submit(
+                        session.cleanup_future = self._compaction_executor.submit(
                             self._run_post_turn_memory_refresh, cleanup_job
                         )
                         session.is_compacting = True
@@ -1882,3 +1942,4 @@ class ChatSessionManager:
         self.knowledge_store.close()
         self.session_store.close()
         self.executor.shutdown(wait=False, cancel_futures=True)
+        self._compaction_executor.shutdown(wait=False, cancel_futures=True)

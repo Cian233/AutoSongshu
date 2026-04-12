@@ -537,6 +537,12 @@ export function normalizeMessagePart(
     } as ToolResultPart;
   }
 
+  // Image
+  if (type === "image") {
+    const url = String(raw.url || "");
+    return url ? { type: "image" as const, url } : null;
+  }
+
   // Fallback: extract text
   const text = safeStringify(raw.text || raw.content).trim();
   return text ? { type: "output_text", text } : null;

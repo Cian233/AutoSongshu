@@ -289,6 +289,15 @@ class PythonSandbox:
             return
 
         print(f"Installing {len(packages)} bootstrap packages into sandbox: {', '.join(packages)}")
+
+        # Build index args; always include official PyPI as fallback
+        # to handle mirror 403 errors (e.g. tsinghua mirror blocking lxml wheels).
+        index_args = list(self._command_index_args())
+        official_pypi = "https://pypi.org/simple"
+        has_official = any(official_pypi in arg for arg in index_args)
+        if not has_official:
+            index_args.extend(["--extra-index-url", official_pypi])
+
         uv_path = shutil.which("uv")
         if uv_path:
             command = [
@@ -297,7 +306,7 @@ class PythonSandbox:
                 "install",
                 "--python",
                 str(self.python_executable),
-                *self._command_index_args(),
+                *index_args,
                 *packages,
             ]
         else:
@@ -306,7 +315,7 @@ class PythonSandbox:
                 "-m",
                 "pip",
                 "install",
-                *self._command_index_args(),
+                *index_args,
                 *packages,
             ]
 
@@ -316,11 +325,41 @@ class PythonSandbox:
             cwd=self.root_dir,
         )
         if not result["ok"]:
-            raise SandboxError(
-                "Failed to install default sandbox packages.\n"
-                f"stdout:\n{result['stdout']}\n"
-                f"stderr:\n{result['stderr']}"
+            # If the first attempt failed (e.g. mirror 403), retry with
+            # official PyPI as the sole index.
+            print("First install attempt failed. Retrying with official PyPI...")
+            if uv_path:
+                retry_command = [
+                    uv_path,
+                    "pip",
+                    "install",
+                    "--python",
+                    str(self.python_executable),
+                    "--index-url",
+                    official_pypi,
+                    *packages,
+                ]
+            else:
+                retry_command = [
+                    str(self.python_executable),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--index-url",
+                    official_pypi,
+                    *packages,
+                ]
+            result = self._run_command(
+                retry_command,
+                timeout_sec=self.settings.bootstrap_timeout_sec,
+                cwd=self.root_dir,
             )
+            if not result["ok"]:
+                raise SandboxError(
+                    "Failed to install default sandbox packages.\n"
+                    f"stdout:\n{result['stdout']}\n"
+                    f"stderr:\n{result['stderr']}"
+                )
         print("Bootstrap packages installed successfully.")
 
     def _ensure_bootstrap_packages(self) -> None:

@@ -45,14 +45,30 @@ class SkillScriptRunner:
         manual_skills: list[LoadedSkill] | None = None,
     ) -> None:
         manual_skills = manual_skills or []
-        self._skills_by_name = {
+        new_skills = {
             skill.canonical_name: skill
             for skill in [*loaded_skills, *manual_skills]
             if skill.scripts
         }
-        self._visible_skill_names = {
+        new_visible = {
             skill.canonical_name for skill in loaded_skills if skill.scripts
         }
+
+        # Guard: if the new result is empty but we already have skills loaded,
+        # keep the existing ones.  This prevents rebuild_context() from
+        # accidentally wiping the script registry when a transient error
+        # causes skill re-discovery to fail.
+        if not new_skills and self._skills_by_name:
+            import logging
+            logging.getLogger(__name__).warning(
+                "update_skills() received empty skill list while %d skills "
+                "are already loaded. Keeping existing skills.",
+                len(self._skills_by_name),
+            )
+            return
+
+        self._skills_by_name = new_skills
+        self._visible_skill_names = new_visible
 
     def describe(self) -> dict[str, Any]:
         skills = sorted(

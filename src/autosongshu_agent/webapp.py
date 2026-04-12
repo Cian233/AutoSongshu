@@ -23,7 +23,7 @@ from .chat_manager import (
     CreateChatSessionRequest,
     SendMessageRequest,
 )
-from .config import get_cached_config, reload_config as _reload_config
+from .config import get_cached_config, reload_config as _reload_config, save_config as _save_config
 from .utils import now_iso
 from .knowledge_store import (
     KnowledgeBaseDraft,
@@ -450,6 +450,50 @@ def create_app() -> FastAPI:
             "timestamp": now_iso(),
         }
 
+    @app.put("/api/chat/config")
+    async def update_configuration(request: Request) -> dict[str, Any]:
+        """Update selected configuration sections (compaction, etc.) and persist to YAML."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+        config_path = str(body.get("config_path") or manager.default_config_path)
+        try:
+            resolved_path = manager._resolve_config_path(config_path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        try:
+            config = _reload_config(resolved_path)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Apply compaction overrides (with type validation)
+        compaction_patch = body.get("compaction")
+        if isinstance(compaction_patch, dict):
+            _COMPACTION_BOOL_FIELDS = {"auto", "prune", "use_token_counting"}
+            for key, value in compaction_patch.items():
+                if not hasattr(config.compaction, key):
+                    continue
+                expected_type = bool if key in _COMPACTION_BOOL_FIELDS else int
+                if not isinstance(value, expected_type):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"compaction.{key} must be {expected_type.__name__}, got {type(value).__name__}",
+                    )
+                setattr(config.compaction, key, value)
+
+        _save_config(resolved_path, config)
+
+        safe_dict = _config_to_safe_dict(config)
+        return {
+            "status": "updated",
+            "config_path": resolved_path,
+            "config": safe_dict,
+            "timestamp": now_iso(),
+        }
+
     # ── Model routing API ──────────────────────────────────────────
 
     @app.get("/api/models")
@@ -487,6 +531,172 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 status_code=500, detail=f"Failed to switch model: {exc}"
             ) from exc
+
+    @app.post("/api/models")
+    async def add_model_profile(request: Request) -> dict[str, Any]:
+        """Add a new model profile to the config file."""
+        body = await request.json()
+        profile = body.get("profile")
+        if not profile or not isinstance(profile, dict):
+            raise HTTPException(status_code=400, detail="Missing 'profile' object")
+
+        name = profile.get("name", "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Profile 'name' is required")
+        if not profile.get("model_name", "").strip():
+            raise HTTPException(status_code=400, detail="Profile 'model_name' is required")
+
+        try:
+            config_path = manager.default_config_path
+            config = _reload_config(str(config_path))
+
+            # Ensure profiles list exists
+            if not config.model.profiles:
+                config.model.profiles = []
+
+            # Check for duplicate name
+            existing_names = [p.get("name", "") for p in config.model.profiles]
+            if name in existing_names:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Profile '{name}' already exists",
+                )
+
+            # Build profile dict (only include non-empty fields)
+            new_profile: dict[str, Any] = {"name": name}
+            for key in (
+                "display_name", "provider", "model_name", "api_key", "base_url",
+                "temperature", "top_p", "max_tokens", "timeout", "stream",
+                "tasks", "enabled", "cost_per_1m_input", "cost_per_1m_output",
+            ):
+                val = profile.get(key)
+                if val is not None and val != "":
+                    new_profile[key] = val
+
+            # Per-profile compaction overrides
+            compaction = profile.get("compaction")
+            if isinstance(compaction, dict) and compaction:
+                new_profile["compaction"] = compaction
+
+            config.model.profiles.append(new_profile)
+
+            # Set as active if this is the first profile
+            if len(config.model.profiles) == 1:
+                config.model.active = name
+
+            _save_config(str(config_path), config)
+
+            # Refresh router in all sessions
+            manager._refresh_model_routers(config)
+
+            return {
+                "ok": True,
+                "profile": new_profile,
+                "timestamp": now_iso(),
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to add model profile: {exc}"
+            ) from exc
+
+    @app.delete("/api/models/{profile_name}")
+    async def delete_model_profile(profile_name: str) -> dict[str, Any]:
+        """Remove a model profile from the config file."""
+        try:
+            config_path = manager.default_config_path
+            config = _reload_config(str(config_path))
+
+            if not config.model.profiles:
+                raise HTTPException(status_code=404, detail="No profiles configured")
+
+            original_len = len(config.model.profiles)
+            config.model.profiles = [
+                p for p in config.model.profiles
+                if p.get("name") != profile_name
+            ]
+
+            if len(config.model.profiles) == original_len:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Profile '{profile_name}' not found",
+                )
+
+            # Clear active if it was the deleted profile
+            if config.model.active == profile_name:
+                config.model.active = (
+                    config.model.profiles[0].get("name")
+                    if config.model.profiles
+                    else None
+                )
+
+            _save_config(str(config_path), config)
+            manager._refresh_model_routers(config)
+
+            return {
+                "ok": True,
+                "deleted": profile_name,
+                "timestamp": now_iso(),
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to delete model profile: {exc}"
+            ) from exc
+
+    @app.patch("/api/models/{profile_name}")
+    async def update_model_profile(profile_name: str, request: Request) -> dict[str, Any]:
+        """Update fields (including compaction) of an existing model profile."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+        config_path = manager.default_config_path
+        config = _reload_config(str(config_path))
+
+        if not config.model.profiles:
+            raise HTTPException(status_code=404, detail="No profiles configured")
+
+        target = None
+        for p in config.model.profiles:
+            if isinstance(p, dict) and p.get("name") == profile_name:
+                target = p
+                break
+        if target is None:
+            raise HTTPException(status_code=404, detail=f"Profile '{profile_name}' not found")
+
+        # Merge update fields
+        for key in (
+            "display_name", "provider", "model_name", "api_key", "base_url",
+            "temperature", "top_p", "max_tokens", "timeout", "stream",
+            "tasks", "enabled", "cost_per_1m_input", "cost_per_1m_output",
+        ):
+            if key in body:
+                target[key] = body[key]
+
+        # Handle compaction merge
+        if "compaction" in body:
+            compaction_patch = body["compaction"]
+            if isinstance(compaction_patch, dict) and compaction_patch:
+                existing_compaction = target.get("compaction", {})
+                if not isinstance(existing_compaction, dict):
+                    existing_compaction = {}
+                existing_compaction.update(compaction_patch)
+                target["compaction"] = existing_compaction
+            elif compaction_patch is None:
+                target.pop("compaction", None)
+
+        _save_config(str(config_path), config)
+        manager._refresh_model_routers(config)
+
+        return {
+            "ok": True,
+            "profile": target,
+            "timestamp": now_iso(),
+        }
 
     @app.get("/api/bootstrap")
     async def bootstrap() -> dict[str, Any]:

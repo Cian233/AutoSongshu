@@ -253,6 +253,14 @@ def normalize_message_part(part: Any, role: str | None = None) -> dict[str, Any]
             ),
         }
 
+    if part_type == "image_url":
+        image_url = normalized.get("image_url", {})
+        url = image_url.get("url", "") if isinstance(image_url, dict) else str(image_url)
+        return {
+            "type": "image",
+            "url": url,
+        }
+
     text = _first_text_value(normalized, ("text", "content"))
     if not text:
         return None
@@ -425,6 +433,12 @@ def part_to_agent_block(part: dict[str, Any]) -> dict[str, Any]:
             if str(item.get("type") or "").strip().lower() == "output_text":
                 output.append({"type": "text", "text": str(item.get("text") or "")})
                 continue
+            if str(item.get("type") or "").strip().lower() == "image":
+                output.append({
+                    "type": "image",
+                    "url": str(item.get("url") or ""),
+                })
+                continue
             output.append(
                 {
                     "type": "text",
@@ -436,5 +450,10 @@ def part_to_agent_block(part: dict[str, Any]) -> dict[str, Any]:
             "id": str(part.get("tool_call_id") or ""),
             "name": str(part.get("name") or ""),
             "output": output,
+        }
+    if part_type == "image":
+        return {
+            "type": "image",
+            "url": str(part.get("url") or ""),
         }
     return {"type": "text", "text": json.dumps(part, ensure_ascii=False, default=str)}
