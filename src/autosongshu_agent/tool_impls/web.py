@@ -170,6 +170,10 @@ def web_fetch(
         )
         resp.raise_for_status()
 
+        # Ensure correct encoding for text responses
+        if "charset" not in resp.headers.get("content-type", "").lower():
+            resp.encoding = "utf-8"
+
         content_type = resp.headers.get("content-type", "")
         if "text/html" in content_type:
             text = _html_to_text(resp.text)

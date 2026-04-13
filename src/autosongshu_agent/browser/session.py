@@ -24,6 +24,70 @@ from .utils import (
     truncate_text,
 )
 
+import re as _re
+
+
+def _extract_charset(content_type: str | None) -> str | None:
+    """Extract the charset from a Content-Type header value."""
+    if not content_type:
+        return None
+    m = _re.search(r"charset=([^\s;]+)", content_type, _re.IGNORECASE)
+    return m.group(1).strip().lower() if m else None
+
+
+def _fix_mojibake(text: str, content_type: str | None) -> str:
+    """Attempt to fix mojibake caused by UTF-8 bytes decoded as Latin-1.
+
+    When an HTTP server returns a ``Content-Type`` without a ``charset``
+    declaration (e.g. ``application/javascript`` instead of
+    ``application/javascript; charset=utf-8``), many clients (Chrome CDP,
+    httpx, Playwright) fall back to Latin-1 / ISO-8859-1 decoding.
+    If the actual content is UTF-8, this produces mojibake like
+    ``渚ц貢鏍忔槸`` instead of Chinese characters.
+
+    This function detects the common case and re-decodes correctly.
+    """
+    if not text:
+        return text
+
+    declared = _extract_charset(content_type)
+    # If charset is explicitly declared and is NOT a Latin variant,
+    # trust it and return as-is.
+    if declared and declared not in {
+        "latin-1", "latin1", "iso-8859-1", "iso8859-1",
+        "iso-8859-15", "ascii", "us-ascii",
+    }:
+        return text
+
+    # Heuristic: if the text contains characters that are typical of
+    # UTF-8-decoded-as-Latin-1 mojibake, try to fix it.
+    # A fast check: look for common CJK range code-points that appear
+    # when UTF-8 bytes are misinterpreted.
+    has_suspicious = False
+    for ch in text[:2000]:
+        cp = ord(ch)
+        # CJK Extension B and beyond (U+20000+) are extremely rare in
+        # normal Latin-1 text but common in mojibake.
+        if cp > 0x4DFF and cp < 0x9FFF:
+            has_suspicious = True
+            break
+        # Latin-1 control chars and uncommon punctuation that appear
+        # in mojibake of CJK text
+        if 0x80 <= cp <= 0x9F:
+            has_suspicious = True
+            break
+
+    if not has_suspicious:
+        return text
+
+    # Try: encode as Latin-1 (recover original bytes) then decode as UTF-8
+    try:
+        raw_bytes = text.encode("latin-1")
+        fixed = raw_bytes.decode("utf-8")
+        return fixed
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
 
 class CDPBrowserSession:
     def __init__(
@@ -172,6 +236,11 @@ class CDPBrowserSession:
             record["response_body_capture"] = "empty"
             record["response_body_length"] = 0
             return
+
+        # Fix encoding: when the server omits charset, CDP/Chrome may
+        # decode UTF-8 bytes as Latin-1.  Detect and correct this.
+        if not result.get("base64Encoded") and body:
+            body = _fix_mojibake(body, content_type)
 
         record["response_body_base64"] = bool(result.get("base64Encoded"))
         record["response_body_length"] = len(body)
@@ -472,7 +541,8 @@ class CDPBrowserSession:
             preview: str | None = None
             if is_textual_content_type(content_type):
                 try:
-                    preview = truncate_text(response.text(), self._response_body_preview_chars)
+                    raw_text = response.text()
+                    preview = truncate_text(_fix_mojibake(raw_text, content_type), self._response_body_preview_chars)
                 except Exception:
                     preview = None
             with self._events_lock:

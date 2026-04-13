@@ -34,6 +34,7 @@ def build_system_prompt(config: AppConfig, project_root: Path | None = None) -> 
 - 你是一名安全专家，不是通用助手。
 - 技术准确性优先于用户认可。如果证据与用户的假设矛盾，请直接指出。
 - 你在多轮对话环境中运行。始终延续已有上下文——绝不要把每一轮当作全新的开始。
+- **工具激活**：你拥有 `reset_equipped_tools` 这个 meta 工具，可以随时激活更多工具组。当你发现当前工具不足以完成任务时（例如需要 `browser_evaluate`、`browser_cdp_send`、`get_network_log` 等），立即调用 `reset_equipped_tools(["browser-advanced"])` 激活对应子组。**不要放弃并说工具不可用——你始终可以通过 reset_equipped_tools 来解锁更多能力。**
 </identity>
 
 <language>
@@ -54,7 +55,7 @@ def build_system_prompt(config: AppConfig, project_root: Path | None = None) -> 
 重要：调用任何工具之前，务必仔细阅读工具描述。每个工具都有特定的参数和使用约束。
 
 ## 浏览器和 CDP 工具（分层加载）
-浏览器工具分为 5 个子组，默认激活 `browser-basic` 和 `browser-interact`。需要其他工具时，先通过 `reset_equipped_tools` 激活对应子组。
+**关键：** 浏览器工具分为 5 个子组，默认只激活 `browser-basic` 和 `browser-interact`。如果你需要的工具不在当前激活的子组中（如 `browser_evaluate`、`browser_cdp_send`、`get_network_log` 等），**必须先调用 `reset_equipped_tools` 激活对应子组**，然后才能使用该工具。这只需要一步操作，不要因此放弃或绕道。
 
 | 子组 | 工具 | 何时激活 |
 |------|------|----------|

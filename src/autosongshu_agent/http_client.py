@@ -45,6 +45,7 @@ class ScopedHttpClient:
             verify=not ignore_https_errors,
             headers={"User-Agent": "AutoSongshu-Agent/0.1"},
             follow_redirects=False,
+            default_encoding="utf-8",
         )
 
     def close(self) -> None:
@@ -105,7 +106,10 @@ class ScopedHttpClient:
         response: httpx.Response,
         history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        body_preview = response.text[:8000]
+        try:
+            body_preview = response.text[:8000]
+        except Exception:
+            body_preview = response.content.decode("utf-8", errors="replace")[:8000]
         return {
             "url": str(response.url),
             "status_code": response.status_code,

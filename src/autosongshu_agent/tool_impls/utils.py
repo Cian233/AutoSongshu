@@ -6,7 +6,7 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from agentscope.message import TextBlock
+from agentscope.message import Base64Source, ImageBlock, TextBlock
 from agentscope.tool import ToolResponse
 
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -32,11 +32,12 @@ def _image_response(
     The response content contains two blocks:
 
     1. A short text description of the image.
-    2. An ``image_url`` block carrying the base64-encoded image data.
+    2. An :class:`ImageBlock` carrying the base64-encoded image data.
 
-    The ``SafeOpenAIChatFormatter`` post-processor will recognise the
-    ``image_url`` block and pass it through to the LLM API so the model
-    can actually *see* the image content.
+    The ``SafeOpenAIChatFormatter`` (via its parent
+    :class:`OpenAIChatFormatter`) will convert the ``ImageBlock`` into
+    the ``image_url`` format expected by the OpenAI Chat Completions API,
+    so the model can actually *see* the image content.
     """
     path = Path(file_path)
     if not path.is_file():
@@ -58,12 +59,14 @@ def _image_response(
 
     mime = mimetypes.guess_type(str(path))[0] or "image/png"
     b64 = base64.b64encode(data).decode("ascii")
-    data_url = f"data:{mime};base64,{b64}"
 
     desc = description or f"Image loaded from {file_path} ({mime}, {size} bytes)"
     content: list[Any] = [
         TextBlock(type="text", text=desc),
-        {"type": "image_url", "image_url": {"url": data_url}},
+        ImageBlock(
+            type="image",
+            source=Base64Source(type="base64", media_type=mime, data=b64),
+        ),
     ]
     return ToolResponse(content=content)
 

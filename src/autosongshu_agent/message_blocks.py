@@ -452,8 +452,22 @@ def part_to_agent_block(part: dict[str, Any]) -> dict[str, Any]:
             "output": output,
         }
     if part_type == "image":
-        return {
-            "type": "image",
-            "url": str(part.get("url") or ""),
-        }
+        # AgentScope ImageBlock: {"type": "image", "source": {...}}
+        # Or OpenAI image_url block: {"type": "image_url", "image_url": {"url": ...}}
+        source = part.get("source")
+        if isinstance(source, dict):
+            src_type = source.get("type", "")
+            if src_type == "base64":
+                media = source.get("media_type", "image/png")
+                data = source.get("data", "")
+                if data:
+                    return {"type": "image", "url": f"data:{media};base64,{data}"}
+            elif src_type == "url":
+                return {"type": "image", "url": source.get("url", "")}
+        # Fallback: check for direct url field or image_url nesting
+        url = part.get("url") or ""
+        if not url:
+            image_url = part.get("image_url")
+            url = image_url.get("url", "") if isinstance(image_url, dict) else str(image_url or "")
+        return {"type": "image", "url": url}
     return {"type": "text", "text": json.dumps(part, ensure_ascii=False, default=str)}
