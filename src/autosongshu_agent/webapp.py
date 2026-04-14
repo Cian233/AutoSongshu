@@ -41,6 +41,7 @@ from .permissions import (
 from .commands import CommandRegistry, default_command_registry
 from .exceptions import AutoSongshuError
 from .auth import TokenAuthMiddleware
+from .project_store import ProjectStore, ProjectCreateRequest
 
 
 class KnowledgeHitTestingRequest(BaseModel):
@@ -276,6 +277,7 @@ def create_app() -> FastAPI:
     hub = SSEHub()
     approval_manager = get_approval_manager()
     default_goal = "继续评估登录、账号与会话流程中的常见 Web 安全问题。"
+    project_store = ProjectStore(data_dir=project_root / "data")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -941,8 +943,11 @@ def create_app() -> FastAPI:
             return manager.create_chat_session(payload)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AutoSongshuError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=_safe_error_detail(exc)) from exc
+            logger.exception("Failed to create chat session")
+            raise HTTPException(status_code=500, detail=f"创建会话失败: {exc}") from exc
 
     @app.get("/api/chat/sessions/{session_id}")
     async def get_chat_session(session_id: str) -> dict[str, Any]:
@@ -1275,15 +1280,52 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=_safe_error_detail(exc)) from exc
 
+    # --- Project Management API ---
+    @app.get("/api/projects")
+    async def list_projects() -> dict[str, Any]:
+        """List all projects."""
+        try:
+            projects = project_store.list_projects()
+            return {"projects": [p.model_dump() for p in projects]}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/projects")
+    async def create_project(payload: ProjectCreateRequest) -> dict[str, Any]:
+        """Create a new project."""
+        try:
+            project = project_store.create_project(
+                name=payload.name,
+                workspace_dir=payload.workspace_dir,
+            )
+            return project.model_dump()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.delete("/api/projects/{project_id}")
+    async def delete_project(project_id: str) -> dict[str, Any]:
+        """Delete a project."""
+        try:
+            success = project_store.delete_project(project_id)
+            if not success:
+                raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+            return {"status": "deleted", "project_id": project_id}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     # --- Project workspace file management ---
     @app.get("/api/projects/{project_id}/workspace")
     async def list_workspace_files(project_id: str) -> dict[str, Any]:
         """List all files in the project workspace as a tree structure."""
         try:
-            config = get_cached_config()
-            workspace_root = Path(config.project.workspace_dir).resolve()
-            if not workspace_root.exists():
-                return {"files": [], "project_id": project_id, "workspace_dir": str(workspace_root)}
+            project = project_store.get_project(project_id)
+            if project is None:
+                raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+
+            workspace_root = Path(project.workspace_dir).resolve()
+            workspace_root.mkdir(parents=True, exist_ok=True)
 
             def build_tree(directory: Path) -> list[dict[str, Any]]:
                 items = []
@@ -1308,6 +1350,8 @@ def create_app() -> FastAPI:
 
             files = build_tree(workspace_root)
             return {"files": files, "project_id": project_id, "workspace_dir": str(workspace_root)}
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1319,8 +1363,11 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         """Upload a file to the project workspace."""
         try:
-            config = get_cached_config()
-            workspace_root = Path(config.project.workspace_dir).resolve()
+            project = project_store.get_project(project_id)
+            if project is None:
+                raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+
+            workspace_root = Path(project.workspace_dir).resolve()
             workspace_root.mkdir(parents=True, exist_ok=True)
 
             target_path = workspace_root / path if path else workspace_root / file.filename
@@ -1347,8 +1394,11 @@ def create_app() -> FastAPI:
     async def delete_workspace_file(project_id: str, path: str) -> dict[str, Any]:
         """Delete a file or directory from the project workspace."""
         try:
-            config = get_cached_config()
-            workspace_root = Path(config.project.workspace_dir).resolve()
+            project = project_store.get_project(project_id)
+            if project is None:
+                raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+
+            workspace_root = Path(project.workspace_dir).resolve()
             target_path = (workspace_root / path).resolve()
 
             if not target_path.is_relative_to(workspace_root):

@@ -29,12 +29,14 @@ import {
 } from "../../hooks/use-command-autocomplete";
 import { CommandSuggestions } from "./CommandSuggestions";
 import { fetchJson } from "../../lib/api";
+import { normalizeSessionDetail } from "../../lib/message-normalizer";
 import {
   API_ENDPOINTS,
   sessionMessagesUrl,
 } from "../../lib/api-endpoints";
 import { useKnowledgeStore } from "../../stores/use-knowledge-store";
 import { useAuthorizationStore } from "../../stores/use-authorization-store";
+import { useProjectStore } from "../../stores/use-project-store";
 
 // ── Props ───────────────────────────────────────────────────────
 
@@ -61,6 +63,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const isSubmitting = useSessionStore((state) => state.isSubmitting);
   const setSubmitting = useSessionStore((state) => state.setSubmitting);
   const selectedSessionId = useSessionStore((state) => state.selectedSessionId);
+  const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
   const selectedKnowledgeBaseIds = useKnowledgeStore(
     (state) => state.selectedKnowledgeBaseIds,
   );
@@ -107,13 +110,12 @@ export const Composer: React.FC<ComposerProps> = ({
               body: JSON.stringify({ content }),
             },
           );
+          const normalizedDetail = normalizeSessionDetail(detail as Record<string, unknown>);
           useSessionStore.getState().setSessionDetail(
             selectedSessionId,
-            detail as unknown as import("../../types/session").SessionDetail,
+            normalizedDetail,
           );
-          useSessionStore.getState().upsertSessionSummary(
-            detail as unknown as import("../../types/session").SessionSummary,
-          );
+          useSessionStore.getState().upsertSessionSummary(normalizedDetail);
         } else {
           // Create new session with message
           const defaultConfigPath =
@@ -125,6 +127,7 @@ export const Composer: React.FC<ComposerProps> = ({
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 config_path: defaultConfigPath,
+                project_id: selectedProjectId || "",
                 message: content,
                 engagement_name: authorizationDraft.name || null,
                 authorization: authorizationDraft.authorization || null,
@@ -140,14 +143,15 @@ export const Composer: React.FC<ComposerProps> = ({
           const sessionId = String(
             (detail as Record<string, unknown>).id || "",
           );
+          console.log("[Composer] Created session:", sessionId, detail);
+          const normalizedDetail = normalizeSessionDetail(detail as Record<string, unknown>);
+          console.log("[Composer] Normalized detail:", normalizedDetail);
+          useSessionStore.getState().setSessionDetail(sessionId, normalizedDetail);
+          console.log("[Composer] After setSessionDetail, selectedSessionId:", useSessionStore.getState().selectedSessionId);
           useSessionStore.getState().selectSession(sessionId);
-          useSessionStore.getState().setSessionDetail(
-            sessionId,
-            detail as unknown as import("../../types/session").SessionDetail,
-          );
-          useSessionStore.getState().upsertSessionSummary(
-            detail as unknown as import("../../types/session").SessionSummary,
-          );
+          console.log("[Composer] After selectSession, selectedSessionId:", useSessionStore.getState().selectedSessionId);
+          useSessionStore.getState().upsertSessionSummary(normalizedDetail);
+          console.log("[Composer] After upsertSessionSummary, sessions count:", useSessionStore.getState().sessions.length);
           useSessionStore.getState().clearFindings();
           useSessionStore.getState().clearSteps();
         }
@@ -177,6 +181,7 @@ export const Composer: React.FC<ComposerProps> = ({
       text,
       isSubmitting,
       selectedSessionId,
+      selectedProjectId,
       authorizationDraft,
       selectedKnowledgeBaseIds,
       setSubmitting,

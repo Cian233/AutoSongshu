@@ -31,7 +31,7 @@ export function AppShell({ sidebar, children, rightPanel, className }: AppShellP
     <div
       className={cn(
         // Base grid layout matching .app-shell
-        "grid gap-0 h-[100dvh] min-h-[100dvh] overflow-hidden p-0",
+        "grid gap-0 h-[100dvh] min-h-[100dvh] overflow-hidden p-2",
         // Three-column grid: sidebar | chat | right panel
         sidebarOpen
           ? "[grid-template-columns:var(--sidebar-width)_minmax(0,1fr)_var(--right-sidebar-width)]"
@@ -50,7 +50,7 @@ export function AppShell({ sidebar, children, rightPanel, className }: AppShellP
         className={cn(
           "flex flex-col gap-4 min-h-0 h-full",
           "px-4 py-6",
-          "bg-[var(--sidebar)] border-r border-[var(--line)]",
+          "bg-[var(--sidebar)] border border-[var(--line)] rounded-2xl shadow-[var(--shadow-sm)]",
           "overflow-x-hidden overflow-y-auto",
           // Responsive adjustments
           "max-lg:h-auto max-lg:min-h-auto max-lg:overflow-visible max-lg:border-r-0 max-lg:border-b border-b-[var(--line)]",
@@ -77,7 +77,7 @@ export function AppShell({ sidebar, children, rightPanel, className }: AppShellP
       )}
 
       {/* Main Chat Area */}
-      <main className="flex flex-col min-h-0 min-w-0 h-full overflow-hidden">
+      <main className="flex flex-col min-h-0 min-w-0 h-full overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--panel)] shadow-[var(--shadow-sm)]">
         {children}
       </main>
 
@@ -87,7 +87,7 @@ export function AppShell({ sidebar, children, rightPanel, className }: AppShellP
           className={cn(
             "flex flex-col min-h-0 h-full",
             "px-4 py-6 overflow-y-auto",
-            "bg-[var(--sidebar)] border-l border-[var(--line)]",
+            "bg-[var(--sidebar)] border border-[var(--line)] rounded-2xl shadow-[var(--shadow-sm)] ml-2",
             // Hide on smaller screens
             "max-lg:hidden",
           )}

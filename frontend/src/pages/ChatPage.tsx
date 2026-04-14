@@ -1,7 +1,7 @@
 // ── ChatPage ───────────────────────────────────────────────────
 // Main chat page composing AppShell with all sub-components.
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Sidebar } from "../components/layout/Sidebar";
 import { SessionList } from "../components/session/SessionList";
@@ -19,6 +19,7 @@ import { ApprovalModal } from "../components/approval/ApprovalModal";
 import { SettingsDialog } from "../components/settings/SettingsDialog";
 import { useSessionStore } from "../stores/use-session-store";
 import { useSearchStore } from "../stores/use-search-store";
+import { useProjectStore } from "../stores/use-project-store";
 import { useTheme } from "../hooks/use-theme";
 import { useSSE } from "../hooks/use-sse";
 import { useKeyboardShortcuts } from "../hooks/use-keyboard-shortcuts";
@@ -37,14 +38,41 @@ export default function ChatPage() {
 
   const selectedSessionId = useSessionStore((s) => s.selectedSessionId);
   const sessionDetails = useSessionStore((s) => s.sessionDetails);
+  const sessions = useSessionStore((s) => s.sessions);
   const selectSession = useSessionStore((s) => s.selectSession);
   const searchOpen = useSearchStore((s) => s.searchOpen);
+
+  const loadProjects = useProjectStore((s) => s.loadProjects);
+  const projects = useProjectStore((s) => s.projects);
+  const selectedProjectId = useProjectStore((s) => s.selectedProjectId);
+  const selectProject = useProjectStore((s) => s.selectProject);
 
   const currentSession = selectedSessionId
     ? sessionDetails.get(selectedSessionId)
     : undefined;
 
   const messages = currentSession?.messages ?? [];
+
+  useEffect(() => {
+    loadProjects().catch(() => undefined);
+  }, [loadProjects]);
+
+  useEffect(() => {
+    if (!projects.length) return;
+    if (!selectedProjectId) {
+      selectProject(projects[0].id);
+    }
+  }, [projects, selectedProjectId, selectProject]);
+
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    if (!selectedSessionId) return;
+
+    const current = sessions.find((s) => String(s.id) === String(selectedSessionId));
+    if (current && String(current.project_id || "") !== String(selectedProjectId)) {
+      selectSession(null);
+    }
+  }, [selectedProjectId, selectedSessionId, sessions, selectSession]);
 
   // ── Callbacks ────────────────────────────────────────────────
 

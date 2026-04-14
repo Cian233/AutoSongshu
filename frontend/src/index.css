@@ -5,23 +5,23 @@
 /* ── Design Tokens ────────────────────────────────────────────── */
 :root {
   /* ── Colors ──────────────────────────────────────────────────── */
-  --bg: #f5f5f7;
-  --bg-soft: #eaeaec;
-  --bg-hover: #e8e8eb;
+  --bg: #f3f4f7;
+  --bg-soft: #eceef4;
+  --bg-hover: #e7e9f0;
   --panel: #ffffff;
-  --panel-strong: #ececf0;
-  --sidebar: #fafafa;
-  --sidebar-soft: #f0f0f2;
-  --sidebar-hover: #eaeaec;
-  --sidebar-active: #e2e2e6;
-  --line: #e5e5e7;
-  --line-strong: #d1d1d6;
-  --text: #1d1d1f;
-  --text-secondary: #424245;
-  --muted: #6e6e73;
-  --muted-soft: #8e8e93;
-  --accent: #7c3aed;
-  --accent-hover: #6d28d9;
+  --panel-strong: #f5f6fb;
+  --sidebar: #f8f9fd;
+  --sidebar-soft: #eef1f8;
+  --sidebar-hover: #e7ebf5;
+  --sidebar-active: #dfe4f1;
+  --line: #e4e8f2;
+  --line-strong: #cfd7e8;
+  --text: #171a26;
+  --text-secondary: #3a4158;
+  --muted: #6a728b;
+  --muted-soft: #8a92aa;
+  --accent: #5b5bd6;
+  --accent-hover: #4b4bc2;
   --accent-soft: rgba(124, 58, 237, 0.08);
   --accent-muted: rgba(124, 58, 237, 0.15);
   --success: #22c55e;
@@ -34,11 +34,11 @@
   --info-soft: rgba(59, 130, 246, 0.08);
 
   /* ── Shadows ────────────────────────────────────────────────── */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.06), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
-  --shadow-float: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+  --shadow-xs: 0 1px 2px rgba(22, 33, 72, 0.05);
+  --shadow: 0 2px 6px rgba(34, 51, 102, 0.08), 0 1px 2px rgba(34, 51, 102, 0.06);
+  --shadow-md: 0 8px 20px rgba(27, 39, 82, 0.12), 0 2px 4px rgba(27, 39, 82, 0.08);
+  --shadow-lg: 0 16px 28px rgba(22, 33, 72, 0.15), 0 4px 12px rgba(22, 33, 72, 0.1);
+  --shadow-float: 0 24px 44px rgba(22, 33, 72, 0.18), 0 8px 18px rgba(22, 33, 72, 0.12);
 
   /* ── Radii ──────────────────────────────────────────────────── */
   --radius-xl: 16px;

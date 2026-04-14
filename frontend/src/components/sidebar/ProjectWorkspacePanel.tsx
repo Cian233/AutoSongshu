@@ -2,7 +2,7 @@
 // Displays project workspace files with upload/download/delete support.
 // Codex-style: all sessions in a project share this workspace.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Upload,
   FolderOpen,
@@ -254,6 +254,12 @@ export function ProjectWorkspacePanel({ className }: ProjectWorkspacePanelProps)
       setIsLoading(false);
     }
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (selectedProjectId) {
+      loadWorkspace();
+    }
+  }, [selectedProjectId, loadWorkspace]);
 
   // Handle file upload
   const handleUpload = useCallback(

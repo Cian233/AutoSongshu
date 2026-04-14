@@ -1399,6 +1399,7 @@ class ChatSessionManager:
         ]
         session = ChatSessionState(
             session_id=self._next_session_id(),
+            project_id=payload.project_id or "",
             title=self._truncate_title(payload.message),
             config_path=self._resolve_config_path(payload.config_path),
             engagement_name=(payload.engagement_name or "").strip() or None,

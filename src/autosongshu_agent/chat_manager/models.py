@@ -248,6 +248,7 @@ class ChatSessionState:
     def summary_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
             "id": self.session_id,
+            "project_id": self.project_id,
             "object": "chat.session",
             "title": self.title,
             "status": self.status,
@@ -309,6 +310,7 @@ class ChatSessionState:
     def persistence_dict(self) -> dict[str, Any]:
         return {
             "id": self.session_id,
+            "project_id": self.project_id,
             "title": self.title,
             "status": self.status,
             "config_path": self.config_path,
@@ -336,6 +338,7 @@ class ChatSessionState:
         messages.sort(key=lambda item: (item.order_index, item.created_at, item.id))
         return cls(
             session_id=str(payload.get("id") or payload.get("session_id") or ""),
+            project_id=str(payload.get("project_id") or ""),
             title=str(payload.get("title") or "New Chat"),
             config_path=str(payload.get("config_path") or ""),
             engagement_name=payload.get("engagement_name"),
@@ -372,6 +375,7 @@ class MemoryRefreshJob:
 class CreateChatSessionRequest(BaseModel):
     config_path: str
     message: str = Field(min_length=1)
+    project_id: str = ""
     engagement_name: str | None = None
     authorization: str | None = None
     start_url: str | None = None

@@ -191,7 +191,6 @@ def build_system_prompt(config: object, project_root: Path | None = None) -> str
 ## 项目级文件操作（Codex 风格）
 **重要：你工作在一个项目级别的工作空间中。所有会话共享同一个项目工作空间。**
 
-- 项目工作空间路径：`{workspace_dir}`
 - 你可以在项目工作空间中自由读取、创建、编辑文件
 - 所有会话都可以访问这些文件，因此你可以：
   - 在会话 A 中创建脚本，在会话 B 中运行

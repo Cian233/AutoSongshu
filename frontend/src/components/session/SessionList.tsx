@@ -4,6 +4,7 @@
 
 import { useMemo } from "react";
 import { useSessionStore } from "../../stores/use-session-store";
+import { useProjectStore } from "../../stores/use-project-store";
 import { SessionItem } from "./SessionItem";
 import { truncate, isSessionCompacting } from "../../lib/utils";
 
@@ -73,13 +74,19 @@ export function SessionList() {
   const sessions = useSessionStore((s) => s.sessions);
   const selectedSessionId = useSessionStore((s) => s.selectedSessionId);
   const selectSession = useSessionStore((s) => s.selectSession);
+  const selectedProjectId = useProjectStore((s) => s.selectedProjectId);
 
-  const groups = useMemo(() => groupSessionsByDate(sessions), [sessions]);
+  const projectSessions = useMemo(() => {
+    if (!selectedProjectId) return sessions;
+    return sessions.filter((session) => String(session.project_id || "") === String(selectedProjectId));
+  }, [sessions, selectedProjectId]);
 
-  if (!sessions.length) {
+  const groups = useMemo(() => groupSessionsByDate(projectSessions), [projectSessions]);
+
+  if (!projectSessions.length) {
     return (
       <div className="text-[var(--muted)] text-[var(--font-size-sm)] text-center py-8 px-4">
-        还没有会话。发送第一条消息后会自动创建新对话。
+        {selectedProjectId ? "当前项目暂无会话，发送第一条消息即可创建。" : "还没有会话。发送第一条消息后会自动创建新对话。"}
       </div>
     );
   }
