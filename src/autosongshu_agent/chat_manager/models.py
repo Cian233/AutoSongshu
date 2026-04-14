@@ -212,6 +212,7 @@ class ChatMessage:
 @dataclass
 class ChatSessionState:
     session_id: str
+    project_id: str  # Codex-style: sessions belong to projects
     title: str
     config_path: str
     engagement_name: str | None = None

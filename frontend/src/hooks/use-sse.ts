@@ -22,6 +22,17 @@ import type {
   StepUpsertPayload,
   ProgressUpdatePayload,
   ApprovalRequestPayload,
+  SubAgentCreatedPayload,
+  SubAgentCompletedPayload,
+  SubAgentFailedPayload,
+  SubAgentProgressPayload,
+  ErrorRecoveryAttemptPayload,
+  ErrorRecoveryResultPayload,
+  PhaseChangedPayload,
+  PlanUpdatedPayload,
+  ModelRoutedPayload,
+  MemoryHistoricalLoadedPayload,
+  MemoryExperienceStoredPayload,
 } from "../types/sse";
 
 // ── Constants ───────────────────────────────────────────────────
@@ -70,6 +81,10 @@ export function useSSE() {
     setFindings,
     upsertStep,
     setProgress,
+    upsertSubAgent,
+    setErrorRecoveryStats,
+    setCurrentPhase,
+    setActiveModel,
   } = useSessionStore();
 
   // ── Refresh data (resync after reconnection) ──────────────────
@@ -401,6 +416,170 @@ export function useSSE() {
       window.dispatchEvent(new CustomEvent("approval:response"));
     });
 
+    // ── sub_agent.created ──
+    es.addEventListener("sub_agent.created", (event: MessageEvent) => {
+      const payload = safeParseJson<SubAgentCreatedPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      upsertSubAgent(payload.session_id, {
+        id: payload.agent_id,
+        name: payload.agent_name,
+        type: payload.agent_type,
+        status: "running",
+        current_task: payload.task,
+        tools_available: payload.tools_available,
+        started_at: payload.timestamp,
+      });
+    });
+
+    // ── sub_agent.completed ──
+    es.addEventListener("sub_agent.completed", (event: MessageEvent) => {
+      const payload = safeParseJson<SubAgentCompletedPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      upsertSubAgent(payload.session_id, {
+        id: payload.agent_id,
+        name: payload.agent_name,
+        type: payload.agent_type,
+        status: "completed",
+        completed_at: payload.timestamp,
+      });
+    });
+
+    // ── sub_agent.failed ──
+    es.addEventListener("sub_agent.failed", (event: MessageEvent) => {
+      const payload = safeParseJson<SubAgentFailedPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      upsertSubAgent(payload.session_id, {
+        id: payload.agent_id,
+        name: payload.agent_name,
+        type: payload.agent_type,
+        status: "failed",
+        completed_at: payload.timestamp,
+      });
+    });
+
+    // ── sub_agent.progress ──
+    es.addEventListener("sub_agent.progress", (event: MessageEvent) => {
+      const payload = safeParseJson<SubAgentProgressPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      upsertSubAgent(payload.session_id, {
+        id: payload.agent_id,
+        name: payload.agent_name,
+        type: "recon",
+        status: "running",
+        current_task: payload.current_task,
+      });
+    });
+
+    // ── error_recovery.attempt ──
+    es.addEventListener("error_recovery.attempt", (event: MessageEvent) => {
+      const payload = safeParseJson<ErrorRecoveryAttemptPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      const existingStats = useSessionStore.getState().errorRecoveryStats;
+      const newStats = {
+        total_attempts: (existingStats?.total_attempts || 0) + 1,
+        total_successes: existingStats?.total_successes || 0,
+        total_failures: existingStats?.total_failures || 0,
+        last_error_type: payload.error_type,
+        attempts: [
+          ...(existingStats?.attempts || []),
+          {
+            strategy: payload.strategy,
+            success: false,
+            duration_ms: 0,
+            timestamp: payload.timestamp,
+          },
+        ],
+      };
+      setErrorRecoveryStats(payload.session_id, newStats);
+    });
+
+    // ── error_recovery.result ──
+    es.addEventListener("error_recovery.result", (event: MessageEvent) => {
+      const payload = safeParseJson<ErrorRecoveryResultPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      const existingStats = useSessionStore.getState().errorRecoveryStats;
+      if (!existingStats || existingStats.attempts.length === 0) return;
+      const updatedAttempts = [...existingStats.attempts];
+      const lastAttempt = updatedAttempts[updatedAttempts.length - 1];
+      updatedAttempts[updatedAttempts.length - 1] = {
+        ...lastAttempt,
+        success: payload.success,
+        duration_ms: payload.duration_ms,
+      };
+      const newStats = {
+        ...existingStats,
+        attempts: updatedAttempts,
+        total_successes: existingStats.total_successes + (payload.success ? 1 : 0),
+        total_failures: existingStats.total_failures + (payload.success ? 0 : 1),
+      };
+      setErrorRecoveryStats(payload.session_id, newStats);
+    });
+
+    // ── phase.changed ──
+    es.addEventListener("phase.changed", (event: MessageEvent) => {
+      const payload = safeParseJson<PhaseChangedPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      setCurrentPhase(payload.session_id, payload.to_phase);
+    });
+
+    // ── plan.updated ──
+    es.addEventListener("plan.updated", (event: MessageEvent) => {
+      const payload = safeParseJson<PlanUpdatedPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      const detail = useSessionStore.getState().sessionDetails.get(payload.session_id);
+      if (detail) {
+        useSessionStore.getState().setSessionDetail(payload.session_id, {
+          ...detail,
+          plan_steps: payload.plan_steps,
+        });
+      }
+    });
+
+    // ── model.routed ──
+    es.addEventListener("model.routed", (event: MessageEvent) => {
+      const payload = safeParseJson<ModelRoutedPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      setActiveModel(payload.session_id, payload.to_model);
+    });
+
+    // ── memory.historical_loaded ──
+    es.addEventListener("memory.historical_loaded", (event: MessageEvent) => {
+      const payload = safeParseJson<MemoryHistoricalLoadedPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      const detail = useSessionStore.getState().sessionDetails.get(payload.session_id);
+      if (detail) {
+        useSessionStore.getState().setSessionDetail(payload.session_id, {
+          ...detail,
+          historical_experiences_count: payload.experiences_count,
+        });
+      }
+    });
+
+    // ── memory.experience_stored ──
+    es.addEventListener("memory.experience_stored", (event: MessageEvent) => {
+      const payload = safeParseJson<MemoryExperienceStoredPayload>(event.data);
+      if (!payload) return;
+      if (payload.session_id !== useSessionStore.getState().selectedSessionId) return;
+      const detail = useSessionStore.getState().sessionDetails.get(payload.session_id);
+      if (detail) {
+        const currentCount = detail.historical_experiences_count || 0;
+        useSessionStore.getState().setSessionDetail(payload.session_id, {
+          ...detail,
+          historical_experiences_count: currentCount + 1,
+        });
+      }
+    });
+
     // ── Error handler ──
     es.onerror = () => {
       if (useConnectionStore.getState().eventSource !== es) {
@@ -422,6 +601,10 @@ export function useSSE() {
     scheduleRealtimeResync,
     recoverServerConnection,
     loadSessionDetail,
+    upsertSubAgent,
+    setErrorRecoveryStats,
+    setCurrentPhase,
+    setActiveModel,
   ]);
 
   // ── Connect / Disconnect ─────────────────────────────────────

@@ -187,6 +187,21 @@ def build_system_prompt(config: object, project_root: Path | None = None) -> str
 - 当任务需要批量 payload、重复请求逻辑、自定义 Cookie/头、复杂编码、请求签名、TLS 绕过，或在真实尝试后内置工具仍不足时，升级到 `sandbox_*` 工具。
 - 必须先调用 `sandbox_status`。仅在确实需要时才调用 `sandbox_install_packages`。
 - 迭代工作流：`sandbox_read_file(include_line_numbers=True)` → `sandbox_edit_file`（或 `sandbox_multiedit_file`）→ `sandbox_run_python(script_path=...)`。
+
+## 项目级文件操作（Codex 风格）
+**重要：你工作在一个项目级别的工作空间中。所有会话共享同一个项目工作空间。**
+
+- 项目工作空间路径：`{workspace_dir}`
+- 你可以在项目工作空间中自由读取、创建、编辑文件
+- 所有会话都可以访问这些文件，因此你可以：
+  - 在会话 A 中创建脚本，在会话 B 中运行
+  - 保存中间结果供后续会话使用
+  - 维护项目级别的配置文件和输出目录
+- 使用 `sandbox_read_file` 读取项目工作空间中的文件
+- 使用 `sandbox_write_file` 创建或覆盖文件
+- 使用 `sandbox_edit_file` 精确编辑文件
+- 使用 `sandbox_list_dir` 浏览项目工作空间目录
+- 大文件使用 `offset`/`limit` 参数分块读取（OpenCode 风格）
 - **关键规则：写入或修改脚本后，必须调用 `sandbox_run_python` 执行它。`sandbox_write_file` / `sandbox_edit_file` / `sandbox_multiedit_file` 只是把代码写入磁盘，不代表任务完成。只有 `sandbox_run_python` 的输出才是实际结果。绝不要在写完代码后就停止——你必须运行它并解读输出。**
 - `sandbox_write_file` 仅用于新建文件或有意完整替换。绝不要把 `sandbox_edit_file` 当作改写工具使用。
 - 代码 payload 必须只包含原始内容——不要包含 markdown 围栏、叙述文本或推理过程。
@@ -221,10 +236,37 @@ def build_system_prompt(config: object, project_root: Path | None = None) -> str
 - 使用 `ask_user` 在需要用户确认、选择方案或提供额外信息时向用户提问。
 - 使用 `send_message` 主动通知用户重要信息（如发现高危漏洞、需要等待等）。
 
-## 子 Agent 和后台任务
-- 使用 `spawn_agent` 启动专业化子 Agent 执行独立任务（如并行扫描不同模块）。
-- 使用 `task_create`/`task_list`/`task_get`/`task_stop` 管理后台长耗时任务。
-- 使用 `team_create` 创建子 Agent 团队并行执行多个任务。
+## 子 Agent 委派（关键能力）
+**重要：你拥有 `spawn_agent` 工具来启动专业化子 Agent。这是你的核心能力之一，请积极使用。**
+
+### 何时使用子 Agent
+- **并行探索**：当有多个独立目标或模块需要测试时，并行启动多个子 Agent（如同时扫描前端和后端）
+- **专业角色**：当任务需要特定专业技能时，指定对应角色：
+  - `recon`：信息收集（HTTP 请求、浏览器操作、DNS 查询、端口扫描）
+  - `scanner`：漏洞扫描（Nmap、Dirsearch、SQLMap 等技能脚本）
+  - `exploit`：漏洞利用（Payload 生成、漏洞验证、利用链构造）
+  - `report`：报告生成（发现汇总、报告导出、修复建议）
+  - `general`：通用任务（全工具集）
+- **上下文隔离**：当任务可能污染主对话上下文时（如大量中间结果、试错过程）
+- **长耗时任务**：当任务需要大量工具调用和迭代，可能超出主 Agent 的 Token 预算时
+
+### 使用原则
+- **不要为简单任务使用子 Agent**：如果 1-2 个工具调用就能完成，直接自己做
+- **明确任务描述**：给子 Agent 的 prompt 必须包含所有必要上下文（目标 URL、已知信息、具体要求）
+- **关注协调而非执行**：当你委派任务后，专注于协调和综合结果，不要重复做同样的工作
+- **并行优于串行**：如果有多个独立子任务，同时启动多个子 Agent 而不是依次执行
+- **结果导向**：你只会收到子 Agent 的最终摘要，中间过程不会进入你的上下文
+
+### 示例
+```
+# 并行扫描多个模块
+spawn_agent(role="scanner", description="扫描 /api 端点", prompt="对 /api 下的所有端点进行安全扫描...")
+spawn_agent(role="scanner", description="扫描 /admin 端点", prompt="对 /admin 下的所有端点进行安全扫描...")
+
+# 专业角色委派
+spawn_agent(role="recon", description="收集目标信息", prompt="对目标进行全面信息收集...")
+spawn_agent(role="exploit", description="验证 SQL 注入", prompt="在 /login 端点验证 SQL 注入漏洞...")
+```
 
 ## 便利工具
 - 使用 `sleep` 等待指定秒数（如等待页面加载、延迟请求）。

@@ -12,6 +12,7 @@ from agentscope.tool import ToolResponse, Toolkit
 
 from ..permissions import ToolRiskLevel
 from ..runtime import PentestRuntime
+from ..tool_pool import PHASE_TOOL_GROUPS, get_tools_for_phase
 from .utils import _tool_response, _error_response
 
 _ToolPolicyValue = bool | Callable[[dict[str, Any]], bool]
@@ -49,6 +50,7 @@ class _ToolExecutionPolicy:
     max_retries: int = 0
     retry_delay: float = 1.0
     retry_backoff: float = 2.0
+    total_timeout_sec: float = 0.0  # 0 means no total timeout (use per-call timeout)
 
 
 def _policy_enabled(policy: _ToolPolicyValue, arguments: dict[str, Any]) -> bool:
@@ -73,27 +75,52 @@ def _execute_with_retry(
     kwargs: dict,
     policy: _ToolExecutionPolicy,
 ) -> ToolResponse:
-    """Execute a tool with optional retry on transient errors."""
+    """Execute a tool with optional retry on transient errors.
+
+    Inspired by OpenCode's withTimeout strategy:
+    - Each retry attempt respects the per-call timeout
+    - Total retry time is bounded by total_timeout_sec if set
+    - Uses exponential backoff between retries
+    """
     max_retries = policy.max_retries
     if max_retries <= 0:
         return tool_func(runtime, *args, **kwargs)
 
     last_exc: Exception | None = None
     delay = policy.retry_delay
+    start_time = time.monotonic()
 
     for attempt in range(max_retries + 1):
         try:
             return tool_func(runtime, *args, **kwargs)
         except Exception as exc:
             last_exc = exc
+            elapsed = time.monotonic() - start_time
+
+            # Check total timeout limit
+            if policy.total_timeout_sec > 0 and elapsed >= policy.total_timeout_sec:
+                import logging
+                logger = logging.getLogger(f"autosongshu.tool.{tool_func.__name__}")
+                logger.warning(
+                    "Tool %s exceeded total timeout (%.1fs) after %d attempts. Giving up.",
+                    tool_func.__name__,
+                    policy.total_timeout_sec,
+                    attempt + 1,
+                )
+                raise TimeoutError(
+                    f"Tool {tool_func.__name__} exceeded total timeout "
+                    f"({policy.total_timeout_sec:.1f}s) after {attempt + 1} attempts"
+                )
+
             if attempt < max_retries and _is_retryable(exc):
                 import logging
                 logger = logging.getLogger(f"autosongshu.tool.{tool_func.__name__}")
                 logger.warning(
-                    "Tool %s failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                    "Tool %s failed (attempt %d/%d, elapsed %.1fs): %s. Retrying in %.1fs...",
                     tool_func.__name__,
                     attempt + 1,
                     max_retries + 1,
+                    elapsed,
                     exc,
                     delay,
                 )
@@ -388,6 +415,49 @@ class ToolRegistry:
     def get_tool_description(self, tool_name: str) -> str:
         """Return the description for a registered tool."""
         return self._tool_descriptions.get(tool_name, "")
+
+
+class ProgressiveToolManager:
+    """Manages tool disclosure based on penetration testing phase."""
+
+    def __init__(self, registry: ToolRegistry) -> None:
+        self._registry = registry
+        self._current_phase: str | None = None
+
+    def set_phase(self, phase: str) -> None:
+        """Set the current penetration testing phase."""
+        self._current_phase = phase
+
+    def get_active_tools(self) -> list[dict[str, str]]:
+        """Get tools available for the current phase."""
+        if self._current_phase is None:
+            return self._registry.list_tools()
+
+        enabled_tool_names = set(get_tools_for_phase(self._current_phase))
+        return [
+            tool for tool in self._registry.list_tools()
+            if tool["name"] in enabled_tool_names
+        ]
+
+    def get_tool_descriptions(self) -> str:
+        """Get formatted tool descriptions for the system prompt."""
+        active_tools = self.get_active_tools()
+        if not active_tools:
+            return "No tools are currently available."
+
+        lines = ["## Available Tools"]
+        for tool in active_tools:
+            desc = tool.get("description", "No description available.")
+            lines.append(f"- **{tool['name']}** ({tool['group']}): {desc}")
+        return "\n".join(lines)
+
+    def is_tool_available(self, tool_name: str) -> bool:
+        """Check if a tool is available in the current phase."""
+        if self._current_phase is None:
+            return True
+
+        enabled_tool_names = get_tools_for_phase(self._current_phase)
+        return tool_name in enabled_tool_names
 
 
 registry = ToolRegistry()

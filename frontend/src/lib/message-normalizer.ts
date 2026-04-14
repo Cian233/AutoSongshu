@@ -716,6 +716,7 @@ export function normalizeSessionSummary(
 ): SessionSummary {
   return {
     id: String(raw.id || ""),
+    project_id: String(raw.project_id || ""),
     title: raw.title != null ? String(raw.title) : undefined,
     status: raw.status != null
       ? (String(raw.status) as SessionSummary["status"])

@@ -13,8 +13,21 @@ def _slugify(value: str) -> str:
 
 
 class ArtifactStore:
+    """Manages artifact storage with project-level and session-level directories.
+
+    Codex/OpenCode-style architecture:
+    - project_dir: Project-level root (shared across all sessions)
+    - workspace_dir: Project-level shared workspace (files, scripts, outputs)
+    - sessions_dir: Contains per-session artifacts (memory, trajectories)
+    - session_dir: Current session's artifact directory
+    """
+
     def __init__(
-        self, root_dir: str, engagement_name: str, session_name: str | None = None
+        self,
+        root_dir: str,
+        engagement_name: str,
+        session_name: str | None = None,
+        project_dir: str | None = None,
     ) -> None:
         if session_name is None:
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -29,12 +42,45 @@ class ArtifactStore:
             ):
                 raise ValueError(f"Invalid artifact session name: {session_name!r}")
             session_name = normalized
+
         self.root_dir = Path(root_dir).resolve()
-        self.session_dir = self.root_dir / session_name
+
+        # Project-level directory (Codex-style)
+        if project_dir:
+            self.project_dir = Path(project_dir).resolve()
+        else:
+            # Fallback: use root_dir as project dir (legacy behavior)
+            self.project_dir = self.root_dir
+
+        # Project-level shared workspace (all sessions share this)
+        self.workspace_dir = self.project_dir / "workspace"
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+
+        # Session-level artifacts (memory, trajectories, etc.)
+        self.sessions_dir = self.root_dir / "sessions"
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.session_dir = self.sessions_dir / session_name
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
+        # Legacy compatibility: session_dir alias
+        self._session_name = session_name
+
+    @property
+    def session_name(self) -> str:
+        return self._session_name
+
     def path(self, relative_path: str) -> Path:
+        """Resolve a path within the session's artifact directory."""
         target = self.session_dir / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def workspace_path(self, relative_path: str) -> Path:
+        """Resolve a path within the project's shared workspace.
+
+        This is the Codex-style path where all sessions can read/write files.
+        """
+        target = self.workspace_dir / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         return target
 

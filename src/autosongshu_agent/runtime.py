@@ -128,6 +128,8 @@ class PentestRuntime:
             Callable[[list[str], str, int], list[dict[str, Any]]] | None
         ) = None
         self._knowledge_default_base_ids: list[str] = []
+        self._agent_builder = None  # Set by the harness after construction
+        self._agents: dict[str, Any] = {}  # Sub-agent registry
         self._session_metadata: dict[str, Any] = {
             "engagement": {
                 "name": config.engagement.name,

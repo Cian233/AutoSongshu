@@ -1,12 +1,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from agentscope.tool import Toolkit
 
 from .permissions import ToolPermissionContext
 from .runtime import PentestRuntime
+
+
+class PentestPhase(str, Enum):
+    RECON = "recon"
+    SCANNING = "scanning"
+    EXPLOITATION = "exploitation"
+    REPORTING = "reporting"
+
+
+PHASE_TOOL_GROUPS: dict[str, list[str]] = {
+    PentestPhase.RECON: ["http", "browser", "knowledge"],
+    PentestPhase.SCANNING: ["sandbox", "skill-scripts", "findings"],
+    PentestPhase.EXPLOITATION: ["sandbox", "skill-scripts", "findings", "http"],
+    PentestPhase.REPORTING: ["findings", "knowledge"],
+}
+
+
+def get_tools_for_phase(phase: str) -> list[str]:
+    phase_value = phase if isinstance(phase, str) else phase.value
+    group_names = PHASE_TOOL_GROUPS.get(phase_value, [])
+    enabled: list[str] = []
+    for group in DEFAULT_TOOL_GROUPS:
+        if group.name in group_names:
+            enabled.extend(group.tools)
+    return enabled
 
 
 @dataclass(frozen=True)
@@ -288,4 +314,7 @@ __all__ = [
     "DEFAULT_TOOL_GROUPS",
     "build_tool_pool",
     "filter_toolkit_by_pool",
+    "PentestPhase",
+    "PHASE_TOOL_GROUPS",
+    "get_tools_for_phase",
 ]

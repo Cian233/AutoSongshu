@@ -8,7 +8,7 @@ import { Check, X, Loader2, Circle, Ban } from "lucide-react";
 import { useSessionStore } from "../../stores/use-session-store";
 import { PanelSection } from "./PanelSection";
 import { cn } from "../../lib/cn";
-import type { Step, StepState } from "../../types/session";
+import type { Step, StepState, PentestPhase } from "../../types/session";
 
 // ── State icon mapping ──────────────────────────────────────────
 
@@ -28,6 +28,16 @@ const STEP_STATE_COLORS: Record<StepState, string> = {
   skipped: "text-[var(--muted)]",
 };
 
+// ── Phase config ────────────────────────────────────────────────
+
+const PHASE_CONFIG: Record<PentestPhase, { label: string; color: string }> = {
+  planning: { label: "规划", color: "bg-gray-500/20 text-gray-400" },
+  recon: { label: "侦察", color: "bg-blue-500/20 text-blue-400" },
+  scanning: { label: "扫描", color: "bg-green-500/20 text-green-400" },
+  exploitation: { label: "利用", color: "bg-red-500/20 text-red-400" },
+  reporting: { label: "报告", color: "bg-purple-500/20 text-purple-400" },
+};
+
 // ── Helpers ─────────────────────────────────────────────────────
 
 function truncate(str: string, max: number): string {
@@ -38,6 +48,17 @@ function truncate(str: string, max: number): string {
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// ── Phase Badge ─────────────────────────────────────────────────
+
+function PhaseBadge({ phase }: { phase: PentestPhase }) {
+  const config = PHASE_CONFIG[phase];
+  return (
+    <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium", config.color)}>
+      {config.label}
+    </span>
+  );
 }
 
 // ── Step Item ───────────────────────────────────────────────────
@@ -52,6 +73,9 @@ function StepItem({ step, index }: { step: Step; index: number }) {
   const tokens = step.token_usage
     ? ((step.token_usage.input_tokens || 0) + (step.token_usage.output_tokens || 0))
     : 0;
+
+  // Extract phase from tool name or action (heuristic)
+  const phase = extractPhaseFromTool(toolName);
 
   return (
     <div
@@ -91,6 +115,9 @@ function StepItem({ step, index }: { step: Step; index: number }) {
           {toolName}
         </span>
 
+        {/* Phase badge */}
+        {phase && <PhaseBadge phase={phase} />}
+
         {/* Meta: duration + tokens */}
         <span className="flex-shrink-0 text-[var(--font-size-xs)] text-[var(--muted)] whitespace-nowrap">
           {duration}
@@ -113,6 +140,39 @@ function StepItem({ step, index }: { step: Step; index: number }) {
       )}
     </div>
   );
+}
+
+// ── Phase grouping helper ───────────────────────────────────────
+
+function extractPhaseFromTool(toolName: string): PentestPhase | null {
+  const lower = toolName.toLowerCase();
+  if (lower.includes("http") || lower.includes("browser") || lower.includes("dns") || lower.includes("recon")) {
+    return "recon";
+  }
+  if (lower.includes("sandbox") || lower.includes("skill") || lower.includes("scan") || lower.includes("nmap") || lower.includes("dirsearch")) {
+    return "scanning";
+  }
+  if (lower.includes("exploit") || lower.includes("payload") || lower.includes("attack")) {
+    return "exploitation";
+  }
+  if (lower.includes("report") || lower.includes("finding") || lower.includes("export")) {
+    return "reporting";
+  }
+  return null;
+}
+
+function groupStepsByPhase(steps: Step[]): Map<PentestPhase, Step[]> {
+  const groups = new Map<PentestPhase, Step[]>();
+  for (const step of steps) {
+    const phase = extractPhaseFromTool(step.tool_name || step.action || "");
+    if (phase) {
+      if (!groups.has(phase)) {
+        groups.set(phase, []);
+      }
+      groups.get(phase)!.push(step);
+    }
+  }
+  return groups;
 }
 
 // ── Empty State ─────────────────────────────────────────────────
@@ -140,8 +200,11 @@ interface StepsPanelProps {
 export function StepsPanel({ className }: StepsPanelProps) {
   const selectedSessionId = useSessionStore((s) => s.selectedSessionId);
   const steps = useSessionStore((s) => s.steps);
+  const currentPhase = useSessionStore((s) => s.currentPhase);
+  const subAgents = useSessionStore((s) => s.subAgents);
 
   const hasSession = Boolean(selectedSessionId);
+  const phaseGroups = groupStepsByPhase(steps);
 
   return (
     <PanelSection
@@ -165,14 +228,51 @@ export function StepsPanel({ className }: StepsPanelProps) {
           />
         )}
         {hasSession && steps.length > 0 && (
-          <div className="flex flex-col gap-0.5">
-            {steps.map((step) => (
-              <StepItem
-                key={step.index}
-                step={step}
-                index={step.index}
-              />
-            ))}
+          <div className="flex flex-col gap-2">
+            {/* Current phase indicator */}
+            {currentPhase && (
+              <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-[var(--sidebar-hover)]">
+                <span className="text-xs text-[var(--muted)]">当前阶段:</span>
+                <PhaseBadge phase={currentPhase} />
+                {subAgents.length > 0 && (
+                  <span className="text-xs text-[var(--muted)] ml-auto">
+                    {subAgents.length} 个子 Agent
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Grouped steps by phase */}
+            {phaseGroups.size > 0 ? (
+              Array.from(phaseGroups.entries()).map(([phase, phaseSteps]) => (
+                <div key={phase} className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-2 px-2 py-1">
+                    <PhaseBadge phase={phase} />
+                    <span className="text-xs text-[var(--muted)]">
+                      {phaseSteps.length} 个步骤
+                    </span>
+                  </div>
+                  {phaseSteps.map((step) => (
+                    <StepItem
+                      key={step.index}
+                      step={step}
+                      index={step.index}
+                    />
+                  ))}
+                </div>
+              ))
+            ) : (
+              /* Fallback: ungrouped steps */
+              <div className="flex flex-col gap-0.5">
+                {steps.map((step) => (
+                  <StepItem
+                    key={step.index}
+                    step={step}
+                    index={step.index}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
       </PanelSection.Content>

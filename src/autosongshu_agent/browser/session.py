@@ -765,7 +765,7 @@ class CDPBrowserSession:
         page = self._ensure_page()
         page.go_back(wait_until="domcontentloaded")
         try:
-            page.wait_for_load_state("networkidle", timeout=3000)
+            page.wait_for_load_state("networkidle", timeout=self.settings.timeout_ms)
         except Exception:
             pass
         return {"url": page.url, "title": page.title()}
@@ -777,7 +777,7 @@ class CDPBrowserSession:
         page = self._ensure_page()
         page.go_forward(wait_until="domcontentloaded")
         try:
-            page.wait_for_load_state("networkidle", timeout=3000)
+            page.wait_for_load_state("networkidle", timeout=self.settings.timeout_ms)
         except Exception:
             pass
         return {"url": page.url, "title": page.title()}

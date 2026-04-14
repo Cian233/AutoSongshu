@@ -12,6 +12,55 @@ export type SessionStatus =
   | "completed"
   | "in_progress";
 
+// ── Penetration Testing Phase ───────────────────────────────────
+
+export type PentestPhase = "planning" | "recon" | "scanning" | "exploitation" | "reporting";
+
+// ── Plan Step ───────────────────────────────────────────────────
+
+export interface PlanStep {
+  id: string;
+  title: string;
+  description: string;
+  phase: PentestPhase;
+  status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  assigned_agent?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+// ── Sub-Agent Info ──────────────────────────────────────────────
+
+export type SubAgentType = "recon" | "scanner" | "exploit" | "report";
+
+export interface SubAgentInfo {
+  id: string;
+  name: string;
+  type: SubAgentType;
+  status: "idle" | "running" | "completed" | "failed";
+  current_task?: string;
+  tools_available?: string[];
+  started_at?: string;
+  completed_at?: string;
+}
+
+// ── Error Recovery Stats ────────────────────────────────────────
+
+export interface ErrorRecoveryAttempt {
+  strategy: "model_switching" | "task_simplification" | "delegation" | "plan_mode_fallback";
+  success: boolean;
+  duration_ms: number;
+  timestamp: string;
+}
+
+export interface ErrorRecoveryStats {
+  total_attempts: number;
+  total_successes: number;
+  total_failures: number;
+  last_error_type?: string;
+  attempts: ErrorRecoveryAttempt[];
+}
+
 // ── Token Usage ─────────────────────────────────────────────────
 
 export interface CostUsage {
@@ -24,10 +73,24 @@ export interface CostUsage {
   cache_hit_ratio?: number;
 }
 
+// ── Project ─────────────────────────────────────────────────────
+
+export interface Project {
+  id: string;
+  name: string;
+  workspace_dir: string;
+  artifacts_dir: string;
+  isolation_mode: "session" | "user" | "project";
+  created_at: string;
+  updated_at: string;
+  session_count?: number;
+}
+
 // ── Session Summary (list item) ─────────────────────────────────
 
 export interface SessionSummary {
   id: string;
+  project_id: string;  // Codex-style: sessions belong to projects
   title?: string;
   status?: SessionStatus;
   created_at?: string;
@@ -108,6 +171,13 @@ export interface Message {
 
 export interface SessionDetail extends SessionSummary {
   messages: Message[];
+  // Trae Solo pattern fields
+  current_phase?: PentestPhase;
+  plan_steps?: PlanStep[];
+  sub_agents?: SubAgentInfo[];
+  error_recovery?: ErrorRecoveryStats;
+  active_model?: string;
+  historical_experiences_count?: number;
 }
 
 // ── Finding ─────────────────────────────────────────────────────

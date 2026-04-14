@@ -13,6 +13,7 @@ sources share a single budget and are prioritized holistically.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -85,6 +86,7 @@ class ContextOrchestrator:
         self._turn_count: int = 0
         self._compaction_count: int = 0
         self._offload_count: int = 0
+        self._real_time_updater: RealTimeMemoryUpdater | None = None
 
     @property
     def turn_count(self) -> int:
@@ -224,9 +226,224 @@ class ContextOrchestrator:
             },
         }
 
+    def on_tool_result(self, tool_name: str, result: str) -> None:
+        """Handle tool call results for real-time memory updates.
+
+        Extracts key findings and target information from tool results
+        and updates memory immediately without waiting for conversation end.
+
+        Args:
+            tool_name: Name of the tool that produced the result.
+            result: The tool's output string.
+        """
+        if self._real_time_updater is None:
+            self._real_time_updater = RealTimeMemoryUpdater()
+
+        findings = self._real_time_updater.process_tool_result(
+            tool_name, result
+        )
+
+        if findings and self._window is not None:
+            for finding in findings:
+                self._window.add_message(
+                    role="system",
+                    content=f"[Real-time finding from {tool_name}]: {finding.content}",
+                    metadata={
+                        "source_tool": tool_name,
+                        "confidence": finding.confidence,
+                        "finding_type": finding.finding_type,
+                        "real_time": True,
+                    },
+                )
+                logger.info(
+                    "Real-time memory update: tool=%s, type=%s, confidence=%.2f",
+                    tool_name,
+                    finding.finding_type,
+                    finding.confidence,
+                )
+
+        if self._real_time_updater.should_trigger_compaction():
+            self.config._last_compaction_turn = max(
+                0, self._turn_count - self.config.incremental_check_interval + 1
+            )
+
+
+# ── Real-Time Memory Updater ──────────────────────────────────────
+
+@dataclass
+class ExtractedFinding:
+    """A finding extracted from a tool result."""
+
+    content: str
+    finding_type: str
+    confidence: float
+    source_tool: str = ""
+    timestamp: str = ""
+
+
+@dataclass
+class RealTimeMemoryUpdater:
+    """Listens for tool call results and updates memory in real-time.
+
+    Extracts key findings, vulnerabilities, and target information
+    from tool outputs without waiting for conversation end.
+    """
+
+    max_findings_per_tool: int = 5
+    compaction_trigger_threshold: int = 3
+
+    _finding_patterns: dict[str, list[str]] = field(default_factory=lambda: {
+        "vulnerability": [
+            r"vulnerability\s*(?:found|detected|identified)",
+            r"漏洞[发检]",
+            r"exploit(?:able|ed)?\s+success",
+            r"SQL\s*injection",
+            r"XSS(?:\s*vulnerability)?",
+            r"SSRF\s*(?:detected|found)",
+            r"RCE\s*(?:possible|confirmed|detected)",
+            r"authentication\s*bypass",
+            r"权限绕过",
+            r"未授权访问",
+        ],
+        "credential": [
+            r"(?:password|passwd|pwd)\s*[:=]\s*\S+",
+            r"(?:token|api[_-]?key|secret)\s*[:=]\s*[a-zA-Z0-9]{8,}",
+            r"credential\s*(?:found|discovered)",
+            r"密码[发检]",
+            r"凭据[发检]",
+        ],
+        "network": [
+            r"open\s+port\s+\d+",
+            r"port\s+\d+\s+open",
+            r"service\s+running",
+            r"开放端口",
+            r"服务运行",
+            r"(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?",
+        ],
+        "configuration": [
+            r"misconfigur(?:ation|ed)",
+            r"配置错误",
+            r"配置不当",
+            r"insecure\s+(?:setting|configuration)",
+            r"weak\s+(?:cipher|encryption|hash)",
+        ],
+        "error": [
+            r"(?:error|exception|failed|failure)\s*[:：]",
+            r"(?:错误|失败|异常)\s*[:：]",
+            r"traceback\s*\(most\s+recent",
+            r"stack\s*trace",
+        ],
+    })
+
+    _target_info_patterns: list[str] = field(default_factory=lambda: [
+        r"(?:target|host|server|url|endpoint)\s*[:=]\s*(\S+)",
+        r"(?:目标|主机|服务器|地址)\s*[:=]\s*(\S+)",
+        r"(?:IP|ip)\s*(?:address)?\s*[:=]\s*((?:\d{1,3}\.){3}\d{1,3})",
+        r"(?:domain|域名)\s*[:=]\s*([a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,})",
+    ])
+
+    _findings_count: int = 0
+    _last_compaction_trigger: int = 0
+
+    def process_tool_result(
+        self,
+        tool_name: str,
+        result: str,
+    ) -> list[ExtractedFinding]:
+        """Process a tool result and extract findings.
+
+        Args:
+            tool_name: Name of the tool that produced the result.
+            result: The tool's output string.
+
+        Returns:
+            List of ExtractedFinding objects.
+        """
+        if not result or len(result) < 10:
+            return []
+
+        findings: list[ExtractedFinding] = []
+
+        for finding_type, patterns in self._finding_patterns.items():
+            for pattern in patterns:
+                matches = re.finditer(pattern, result, re.IGNORECASE)
+                for match in matches:
+                    if len(findings) >= self.max_findings_per_tool:
+                        break
+
+                    context_start = max(0, match.start() - 50)
+                    context_end = min(len(result), match.end() + 100)
+                    context = result[context_start:context_end].strip()
+
+                    confidence = self._calculate_confidence(
+                        finding_type, match.group(), context
+                    )
+
+                    finding = ExtractedFinding(
+                        content=context,
+                        finding_type=finding_type,
+                        confidence=confidence,
+                        source_tool=tool_name,
+                    )
+                    findings.append(finding)
+                    self._findings_count += 1
+
+            if len(findings) >= self.max_findings_per_tool:
+                break
+
+        return findings
+
+    def should_trigger_compaction(self) -> bool:
+        """Check if enough findings have accumulated to trigger compaction."""
+        if (
+            self._findings_count - self._last_compaction_trigger
+            >= self.compaction_trigger_threshold
+        ):
+            self._last_compaction_trigger = self._findings_count
+            return True
+        return False
+
+    def _calculate_confidence(
+        self,
+        finding_type: str,
+        matched_text: str,
+        context: str,
+    ) -> float:
+        """Calculate confidence score for a finding."""
+        confidence = 0.5
+
+        if finding_type == "vulnerability":
+            confidence += 0.2
+            if any(
+                kw in matched_text.lower()
+                for kw in ["confirmed", "validated", "成功", "检测到"]
+            ):
+                confidence += 0.15
+
+        elif finding_type == "credential":
+            confidence += 0.15
+            if len(matched_text) > 20:
+                confidence += 0.1
+
+        elif finding_type == "network":
+            confidence += 0.1
+
+        elif finding_type == "error":
+            confidence += 0.05
+            if "traceback" in context.lower() or "stack trace" in context.lower():
+                confidence += 0.1
+
+        context_length = len(context)
+        if context_length > 100:
+            confidence += 0.05
+
+        return min(1.0, max(0.0, confidence))
+
 
 __all__ = [
     "OrchestratorConfig",
     "ContextSnapshot",
     "ContextOrchestrator",
+    "RealTimeMemoryUpdater",
+    "ExtractedFinding",
 ]

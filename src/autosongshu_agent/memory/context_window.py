@@ -324,8 +324,6 @@ class TokenBudgetTracker:
             return 0
         if self._encoder is not None:
             return len(self._encoder.encode(text))
-        # Fallback: ~2.5 chars per token is a reasonable middle ground
-        # between CJK (~1.5 chars/token) and Latin (~4 chars/token).
         return max(1, int(len(text) / 2.5))
 
     def count_messages_tokens(self, messages: list[dict[str, Any]]) -> int:
@@ -339,7 +337,7 @@ class TokenBudgetTracker:
                     if isinstance(part, dict):
                         text = part.get("text", "")
                         total += self.count_tokens(text)
-            total += 6  # overhead for role, name, delimiters
+            total += 6
         return total
 
     def available_budget(self, used_tokens: int) -> int:
@@ -352,6 +350,139 @@ class TokenBudgetTracker:
     ) -> bool:
         budget = self.context_window - self.reserved_tokens
         return used_tokens > budget * threshold_ratio
+
+
+class TokenCounter:
+    """Accurate token counter with tiktoken support and caching.
+
+    Uses tiktoken for precise token counting when available,
+    falls back to character-based estimation otherwise.
+    Caches token counts for efficiency.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "gpt-4",
+        cache_max_size: int = 10000,
+    ) -> None:
+        self.model_name = model_name
+        self._cache_max_size = cache_max_size
+        self._encoder = None
+        self._cache: dict[str, int] = {}
+        self._cache_order: list[str] = []
+        self._init_encoder()
+
+    def _init_encoder(self) -> None:
+        try:
+            import tiktoken
+
+            if (
+                "gpt-4" in self.model_name.lower()
+                or "gpt-3.5" in self.model_name.lower()
+            ):
+                self._encoder = tiktoken.encoding_for_model(self.model_name)
+            else:
+                self._encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            self._encoder = None
+
+    def count(self, text: str) -> int:
+        """Count tokens in text with caching.
+
+        Args:
+            text: Text to count tokens for.
+
+        Returns:
+            Token count.
+        """
+        if not text:
+            return 0
+
+        if text in self._cache:
+            return self._cache[text]
+
+        token_count = self._count_tokens(text)
+
+        self._cache[text] = token_count
+        self._cache_order.append(text)
+
+        if len(self._cache) > self._cache_max_size:
+            oldest = self._cache_order.pop(0)
+            self._cache.pop(oldest, None)
+
+        return token_count
+
+    def _count_tokens(self, text: str) -> int:
+        """Count tokens using tiktoken or fallback estimation."""
+        if self._encoder is not None:
+            return len(self._encoder.encode(text))
+
+        text_length = len(text)
+        if text_length == 0:
+            return 0
+
+        cjk_ratio = self._estimate_cjk_ratio(text)
+        if cjk_ratio > 0.3:
+            chars_per_token = 1.8
+        elif cjk_ratio > 0.1:
+            chars_per_token = 2.2
+        else:
+            chars_per_token = 3.5
+
+        return max(1, int(text_length / chars_per_token))
+
+    def _estimate_cjk_ratio(self, text: str) -> float:
+        """Estimate the ratio of CJK characters in text."""
+        cjk_count = 0
+        sample_size = min(len(text), 500)
+        for char in text[:sample_size]:
+            code_point = ord(char)
+            if (
+                (0x4E00 <= code_point <= 0x9FFF)
+                or (0x3400 <= code_point <= 0x4DBF)
+                or (0x20000 <= code_point <= 0x2A6DF)
+                or (0x3040 <= code_point <= 0x309F)
+                or (0x30A0 <= code_point <= 0x30FF)
+            ):
+                cjk_count += 1
+        return cjk_count / max(sample_size, 1)
+
+    def count_messages(self, messages: list[dict[str, Any]]) -> int:
+        """Count tokens for a list of messages.
+
+        Args:
+            messages: List of message dicts with 'content' field.
+
+        Returns:
+            Total token count including per-message overhead.
+        """
+        total = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total += self.count(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        text = part.get("text", "")
+                        total += self.count(text)
+            total += 6
+        return total
+
+    def clear_cache(self) -> None:
+        """Clear the token count cache."""
+        self._cache.clear()
+        self._cache_order.clear()
+
+    @property
+    def cache_size(self) -> int:
+        """Current cache size."""
+        return len(self._cache)
+
+    @property
+    def has_tiktoken(self) -> bool:
+        """Whether tiktoken is available."""
+        return self._encoder is not None
 
 
 @dataclass
@@ -726,6 +857,7 @@ __all__ = [
     "TranscriptStore",
     "CompactedRange",
     "TokenBudgetTracker",
+    "TokenCounter",
     "ContextWindowConfig",
     "ContextWindowManager",
     "CompactionResult",

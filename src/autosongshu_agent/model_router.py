@@ -15,6 +15,7 @@ API), so the abstraction is lightweight — just different credentials + endpoin
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
@@ -48,6 +49,91 @@ class TaskType(str, Enum):
     CODE_GEN = "code_gen"            # Sandbox code generation
     KNOWLEDGE = "knowledge"          # Knowledge base queries
     GENERAL = "general"              # Fallback for anything else
+
+
+class TaskComplexity(str, Enum):
+    """Task complexity levels for automatic model routing."""
+    SIMPLE = "simple"
+    MODERATE = "moderate"
+    COMPLEX = "complex"
+
+
+SIMPLE_INDICATORS = [
+    r"\b(read|get|fetch|query|check|status|info|list|show|view)\b",
+    r"\b(file|log|config|setting|status|version|detail)\b",
+    r"\b(basic|simple|quick|easy|straightforward)\b",
+]
+
+MODERATE_INDICATORS = [
+    r"\b(generate|create|build|implement|write|develop|produce)\b",
+    r"\b(function|method|class|module|component|script)\b",
+    r"\b(refactor|modify|update|change|improve|optimize)\b",
+    r"\b(single-file|one file|single module)\b",
+]
+
+COMPLEX_INDICATORS = [
+    r"\b(architecture|design|system|infrastructure|framework)\b",
+    r"\b(vulnerability|exploit|attack|penetration|security)\b",
+    r"\b(chain|workflow|pipeline|orchestration|integration)\b",
+    r"\b(multi-file|multiple files|cross-module|end-to-end|e2e)\b",
+    r"\b(analysis|investigation|assessment|audit|review)\b",
+]
+
+
+class TaskComplexityAnalyzer:
+    """Analyzes task descriptions to determine complexity level."""
+
+    def __init__(
+        self,
+        simple_indicators: list[str] | None = None,
+        moderate_indicators: list[str] | None = None,
+        complex_indicators: list[str] | None = None,
+    ) -> None:
+        self._simple_patterns = [
+            re.compile(p, re.IGNORECASE)
+            for p in (simple_indicators or SIMPLE_INDICATORS)
+        ]
+        self._moderate_patterns = [
+            re.compile(p, re.IGNORECASE)
+            for p in (moderate_indicators or MODERATE_INDICATORS)
+        ]
+        self._complex_patterns = [
+            re.compile(p, re.IGNORECASE)
+            for p in (complex_indicators or COMPLEX_INDICATORS)
+        ]
+
+    def analyze(self, task_description: str) -> TaskComplexity:
+        """Analyze task description for complexity indicators.
+
+        Scoring:
+        - Each complex indicator match: +3 points
+        - Each moderate indicator match: +2 points
+        - Each simple indicator match: +1 point
+
+        Thresholds:
+        - 0-2 points: SIMPLE
+        - 3-5 points: MODERATE
+        - 6+ points: COMPLEX
+        """
+        if not task_description or not task_description.strip():
+            return TaskComplexity.SIMPLE
+
+        score = 0
+
+        for pattern in self._complex_patterns:
+            score += len(pattern.findall(task_description)) * 3
+
+        for pattern in self._moderate_patterns:
+            score += len(pattern.findall(task_description)) * 2
+
+        for pattern in self._simple_patterns:
+            score += len(pattern.findall(task_description)) * 1
+
+        if score >= 6:
+            return TaskComplexity.COMPLEX
+        if score >= 3:
+            return TaskComplexity.MODERATE
+        return TaskComplexity.SIMPLE
 
 
 # ── Model profile ─────────────────────────────────────────────────
@@ -135,6 +221,93 @@ class ModelProfile:
 
 # ── Model router ──────────────────────────────────────────────────
 
+@dataclass
+class _ModelErrorStats:
+    """Tracks error statistics for a single model."""
+    success_count: int = 0
+    failure_count: int = 0
+
+    @property
+    def total_count(self) -> int:
+        return self.success_count + self.failure_count
+
+    @property
+    def error_rate(self) -> float:
+        if self.total_count == 0:
+            return 0.0
+        return self.failure_count / self.total_count
+
+
+class ErrorRateTracker:
+    """Tracks error rates per model and triggers automatic degradation."""
+
+    def __init__(
+        self,
+        degradation_threshold: float = 0.5,
+        min_samples: int = 3,
+    ) -> None:
+        self._degradation_threshold = degradation_threshold
+        self._min_samples = min_samples
+        self._stats: dict[str, _ModelErrorStats] = {}
+
+    def record_result(self, model_name: str, success: bool) -> None:
+        """Record a success or failure for a model."""
+        if model_name not in self._stats:
+            self._stats[model_name] = _ModelErrorStats()
+
+        stats = self._stats[model_name]
+        if success:
+            stats.success_count += 1
+        else:
+            stats.failure_count += 1
+
+        logger.debug(
+            "ErrorRateTracker: model='%s' success=%s, stats: %d/%d (error_rate=%.2f)",
+            model_name, success, stats.failure_count, stats.total_count, stats.error_rate,
+        )
+
+    def should_degrade(self, model_name: str) -> bool:
+        """Check if a model's error rate exceeds the degradation threshold."""
+        stats = self._stats.get(model_name)
+        if stats is None:
+            return False
+        if stats.total_count < self._min_samples:
+            return False
+        return stats.error_rate >= self._degradation_threshold
+
+    def get_degraded_model(self, current_model: str) -> str | None:
+        """Get a fallback model if the current model should be degraded.
+
+        Returns None if degradation is not needed or no fallback is available.
+        """
+        if not self.should_degrade(current_model):
+            return None
+
+        for model_name, stats in self._stats.items():
+            if model_name == current_model:
+                continue
+            if not self.should_degrade(model_name):
+                logger.warning(
+                    "Degrading from '%s' to '%s' due to high error rate (%.2f%%)",
+                    current_model, model_name,
+                    self._stats[current_model].error_rate * 100,
+                )
+                return model_name
+
+        logger.warning(
+            "All models have high error rates, cannot degrade from '%s'",
+            current_model,
+        )
+        return None
+
+    def get_error_rate(self, model_name: str) -> float:
+        """Get the current error rate for a model."""
+        stats = self._stats.get(model_name)
+        if stats is None:
+            return 0.0
+        return stats.error_rate
+
+
 class ModelRouter:
     """Routes task types to appropriate model profiles.
 
@@ -145,10 +318,17 @@ class ModelRouter:
         model = router.build_model(profile)
     """
 
+    COMPLEXITY_MODEL_MAP: dict[TaskComplexity, str] = {
+        TaskComplexity.SIMPLE: "gpt-4o-mini",
+        TaskComplexity.MODERATE: "gpt-4o",
+        TaskComplexity.COMPLEX: "claude-sonnet",
+    }
+
     def __init__(
         self,
         profiles: list[ModelProfile],
         default_profile_name: str | None = None,
+        complexity_model_map: dict[TaskComplexity, str] | None = None,
     ) -> None:
         self._profiles: dict[str, ModelProfile] = {}
         self._task_index: dict[TaskType, list[str]] = {}
@@ -169,6 +349,15 @@ class ModelRouter:
 
         # Runtime override (set via API)
         self._active_override: str | None = None
+
+        # Task complexity analyzer
+        self._complexity_analyzer = TaskComplexityAnalyzer()
+
+        # Complexity to model name mapping
+        self._complexity_model_map = complexity_model_map or self.COMPLEXITY_MODEL_MAP
+
+        # Error rate tracker
+        self._error_tracker = ErrorRateTracker()
 
         logger.info(
             "ModelRouter initialized: %d profiles, default='%s', tasks=%s",
@@ -198,6 +387,48 @@ class ModelRouter:
     def clear_override(self) -> None:
         """Clear the runtime override, reverting to default routing."""
         self._active_override = None
+
+    def select_model_for_task(self, task_description: str) -> str:
+        """Select the best model for a task based on complexity analysis.
+
+        Uses TaskComplexityAnalyzer to determine task complexity, then maps
+        to the appropriate model profile. Also checks error rates and may
+        degrade to a fallback model if needed.
+
+        Args:
+            task_description: Natural language description of the task.
+
+        Returns:
+            The name of the selected model profile.
+        """
+        complexity = self._complexity_analyzer.analyze(task_description)
+        target_model = self._complexity_model_map.get(complexity, self._default)
+
+        logger.info(
+            "Task complexity: %s, selected model: %s",
+            complexity.value, target_model,
+        )
+
+        degraded = self._error_tracker.get_degraded_model(target_model)
+        if degraded is not None:
+            return degraded
+
+        if target_model in self._profiles:
+            return target_model
+
+        logger.warning(
+            "Complexity-selected model '%s' not available, using default '%s'",
+            target_model, self._default,
+        )
+        return self._default
+
+    def record_task_result(self, model_name: str, success: bool) -> None:
+        """Record the result of a task execution for error rate tracking."""
+        self._error_tracker.record_result(model_name, success)
+
+    def get_model_error_rate(self, model_name: str) -> float:
+        """Get the current error rate for a model."""
+        return self._error_tracker.get_error_rate(model_name)
 
     def resolve(self, task: TaskType) -> ModelProfile:
         """Resolve a task type to the best model profile.
@@ -377,6 +608,9 @@ def _pydantic_to_profile(model_config: Any, default_name: str = "default") -> Mo
 __all__ = [
     "ModelProvider",
     "TaskType",
+    "TaskComplexity",
+    "TaskComplexityAnalyzer",
+    "ErrorRateTracker",
     "ModelProfile",
     "ModelRouter",
     "parse_profiles_from_config",

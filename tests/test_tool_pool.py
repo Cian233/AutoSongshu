@@ -165,7 +165,7 @@ class DefaultToolGroupsTests(unittest.TestCase):
         self.assertIn("browser", group_names)
         self.assertIn("http", group_names)
         self.assertIn("sandbox", group_names)
-        self.assertIn("skills", group_names)
+        self.assertIn("skill-scripts", group_names)
         self.assertIn("findings", group_names)
         self.assertIn("knowledge", group_names)
 
@@ -175,7 +175,7 @@ class DefaultToolGroupsTests(unittest.TestCase):
         self.assertEqual(sandbox_group.risk_level, "high")
 
     def test_skills_group_requires_approval(self) -> None:
-        skills_group = next(g for g in DEFAULT_TOOL_GROUPS if g.name == "skills")
+        skills_group = next(g for g in DEFAULT_TOOL_GROUPS if g.name == "skill-scripts")
         self.assertTrue(skills_group.requires_approval)
 
 

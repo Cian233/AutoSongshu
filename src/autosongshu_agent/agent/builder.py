@@ -20,6 +20,7 @@ from .prompts import build_system_prompt
 from ..runtime import PentestRuntime
 from ..skills import SkillLoadReport, SkillRegistry, SkillRuntimeContext
 from ..tools import register_default_tools
+from ..tool_impls.registry import registry as tool_registry, _wrap_registered_tool, ProgressiveToolManager
 from .utils import _make_agentscope_output_safe
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,8 @@ class _AgentBuilderMixin:
     skill_report: SkillLoadReport
     permission_interceptor: Any = None
     _model_router: ModelRouter | None = None
+    _progressive_tool_manager: ProgressiveToolManager | None = None
+    _agent: ReActAgent | None = None
 
     @property
     def model_router(self) -> ModelRouter:
@@ -279,9 +282,36 @@ class _AgentBuilderMixin:
         )
 
         toolkit = Toolkit()
-        register_default_tools(
-            toolkit, self.runtime, permission_interceptor=self.permission_interceptor
-        )
+
+        if self._progressive_tool_manager is not None:
+            active_tools = self._progressive_tool_manager.get_active_tools()
+            active_tool_names = {tool["name"] for tool in active_tools}
+            active_group_names = {tool["group"] for tool in active_tools}
+
+            for group_name in active_group_names:
+                group_info = tool_registry.groups.get(group_name)
+                if group_info is None:
+                    continue
+                active = group_info.active(self.runtime) if callable(group_info.active) else group_info.active
+                kwargs: dict[str, Any] = {"description": group_info.description, "active": active}
+                if group_info.notes:
+                    kwargs["notes"] = group_info.notes
+                toolkit.create_tool_group(group_name, **kwargs)
+
+            for tool_info in tool_registry.tools:
+                if tool_info.func.__name__ in active_tool_names:
+                    wrapped = _wrap_registered_tool(
+                        tool_info.func,
+                        self.runtime,
+                        policy=tool_info.policy,
+                        permission_interceptor=self.permission_interceptor,
+                    )
+                    toolkit.register_tool_function(wrapped, group_name=tool_info.group_name)
+        else:
+            register_default_tools(
+                toolkit, self.runtime, permission_interceptor=self.permission_interceptor
+            )
+
         skill_report = SkillLoadReport(
             configured_directories=list(self.config.skills.directories)
         )
@@ -311,9 +341,6 @@ class _AgentBuilderMixin:
 
         plan_notebook = PlanNotebook(max_subtasks=self.config.agent.max_subtasks)
 
-        # Override the default plan hint to be less aggressive.
-        # AgentScope's DefaultPlanToHint pushes create_plan on every turn;
-        # we only want a gentle reminder after several tool calls without a plan.
         _patch_plan_hint(plan_notebook)
 
         model = self._build_model()
@@ -321,6 +348,10 @@ class _AgentBuilderMixin:
         sys_prompt = build_system_prompt(self.config)
         if skill_prompt:
             sys_prompt = f"{sys_prompt}\n\n{skill_prompt}"
+
+        if self._progressive_tool_manager is not None:
+            tool_descriptions = self._progressive_tool_manager.get_tool_descriptions()
+            sys_prompt = f"{sys_prompt}\n\n{tool_descriptions}"
 
         agent = _make_agentscope_output_safe(
             ReActAgent(
@@ -337,7 +368,137 @@ class _AgentBuilderMixin:
             ),
         )
 
+        self._agent = agent
         return agent
+
+    def _build_sub_agent(
+        self,
+        role: str,
+        tool_groups: list[str],
+        model_profile: str | None = None,
+    ) -> ReActAgent:
+        """Build a role-specific sub-agent with a filtered set of tool groups.
+
+        Args:
+            role: Human-readable role name used in the system prompt and agent name.
+            tool_groups: List of tool group names to include (e.g. ``["http", "browser-basic"]``).
+            model_profile: Optional model profile name override; falls back to the active profile.
+
+        Returns:
+            A configured ``ReActAgent`` instance scoped to the given role and tools.
+        """
+        agentscope.init(
+            project="autosongshu-agent",
+            name=f"{self.config.engagement.name}/{role}",
+            logging_path=str(self.runtime.artifacts.session_dir / "agentscope" / role),
+            logging_level="INFO",
+        )
+
+        toolkit = Toolkit()
+
+        for group_name in tool_groups:
+            group_info = tool_registry.groups.get(group_name)
+            if group_info is None:
+                logger.warning(
+                    "Sub-agent '%s': tool group '%s' not found; skipping.",
+                    role,
+                    group_name,
+                )
+                continue
+
+            active = group_info.active(self.runtime) if callable(group_info.active) else group_info.active
+            kwargs: dict[str, Any] = {"description": group_info.description, "active": active}
+            if group_info.notes:
+                kwargs["notes"] = group_info.notes
+            toolkit.create_tool_group(group_name, **kwargs)
+
+            for tool_info in tool_registry.tools:
+                if tool_info.group_name == group_name:
+                    wrapped = _wrap_registered_tool(
+                        tool_info.func,
+                        self.runtime,
+                        policy=tool_info.policy,
+                        permission_interceptor=self.permission_interceptor,
+                    )
+                    toolkit.register_tool_function(wrapped, group_name=group_name)
+
+        plan_notebook = PlanNotebook(max_subtasks=self.config.agent.max_subtasks)
+        _patch_plan_hint(plan_notebook)
+
+        if model_profile:
+            profile = self.model_router.get_profile(model_profile)
+            if profile is None:
+                logger.warning(
+                    "Sub-agent '%s': model profile '%s' not found; using active profile.",
+                    role,
+                    model_profile,
+                )
+                model = self._build_model()
+            else:
+                model = self.model_router.build_model(profile)
+        else:
+            model = self._build_model()
+
+        formatter = SafeOpenAIChatFormatter()
+        sys_prompt = self._build_sub_agent_system_prompt(role, tool_groups)
+
+        agent = _make_agentscope_output_safe(
+            ReActAgent(
+                name=f"SubAgent-{role}",
+                sys_prompt=sys_prompt,
+                model=model,
+                formatter=formatter,
+                toolkit=toolkit,
+                plan_notebook=plan_notebook,
+                max_iters=self.config.agent.max_iters,
+                enable_meta_tool=self.config.agent.enable_meta_tool,
+                parallel_tool_calls=self.config.agent.parallel_tool_calls,
+                print_hint_msg=False,
+            ),
+        )
+
+        return agent
+
+    def _build_sub_agent_system_prompt(
+        self,
+        role: str,
+        tool_groups: list[str],
+    ) -> str:
+        """Build a role-specific system prompt for a sub-agent.
+
+        The prompt inherits the base system prompt but is scoped to the
+        given role and only mentions the tool groups available to this agent.
+        """
+        base = build_system_prompt(self.config)
+        role_header = (
+            f"你是 AutoSongshu 的子智能体，角色为「{role}」。"
+            f"你仅拥有以下工具组的能力：{', '.join(tool_groups)}。"
+            f"请专注于你的角色职责，不要超出授权范围操作。"
+        )
+        return f"{role_header}\n\n{base}"
+
+    def set_phase(self, phase: str) -> None:
+        """Set the current penetration testing phase and rebuild the agent.
+
+        Args:
+            phase: The penetration testing phase (e.g., "recon", "scanning",
+                   "exploitation", "reporting").
+        """
+        if self._progressive_tool_manager is None:
+            self._progressive_tool_manager = ProgressiveToolManager(
+                registry=tool_registry
+            )
+
+        self._progressive_tool_manager.set_phase(phase)
+        self._agent = None
+
+    def get_progressive_tool_manager(self) -> ProgressiveToolManager:
+        """Get or create the progressive tool manager."""
+        if self._progressive_tool_manager is None:
+            self._progressive_tool_manager = ProgressiveToolManager(
+                registry=tool_registry
+            )
+        return self._progressive_tool_manager
 
 
 __all__ = ["_AgentBuilderMixin", "FallbackModelWrapper"]

@@ -9,6 +9,9 @@ import type {
   Finding,
   Step,
   Progress,
+  SubAgentInfo,
+  ErrorRecoveryStats,
+  PentestPhase,
 } from "../types/session";
 import {
   normalizeSessionSummary,
@@ -42,6 +45,22 @@ interface SessionState {
   progressSessionId: string | null;
   /** Default config path from bootstrap */
   defaultConfigPath: string;
+  /** Sub-agents for the selected session */
+  subAgents: SubAgentInfo[];
+  /** Session ID that the sub-agents belong to */
+  subAgentsSessionId: string | null;
+  /** Error recovery stats for the selected session */
+  errorRecoveryStats: ErrorRecoveryStats | null;
+  /** Session ID that the error recovery stats belong to */
+  errorRecoverySessionId: string | null;
+  /** Current penetration testing phase */
+  currentPhase: PentestPhase | null;
+  /** Session ID that the current phase belongs to */
+  currentPhaseSessionId: string | null;
+  /** Active model name */
+  activeModel: string | null;
+  /** Session ID that the active model belongs to */
+  activeModelSessionId: string | null;
 }
 
 // ── Actions ─────────────────────────────────────────────────────
@@ -97,6 +116,21 @@ interface SessionActions {
 
   /** Set the default config path */
   setDefaultConfigPath: (path: string) => void;
+
+  /** Set sub-agents for a session */
+  setSubAgents: (sessionId: string, subAgents: SubAgentInfo[]) => void;
+
+  /** Upsert a single sub-agent */
+  upsertSubAgent: (sessionId: string, subAgent: SubAgentInfo) => void;
+
+  /** Set error recovery stats for a session */
+  setErrorRecoveryStats: (sessionId: string, stats: ErrorRecoveryStats) => void;
+
+  /** Set current phase for a session */
+  setCurrentPhase: (sessionId: string, phase: PentestPhase) => void;
+
+  /** Set active model for a session */
+  setActiveModel: (sessionId: string, model: string) => void;
 }
 
 // ── Sort helper ─────────────────────────────────────────────────
@@ -123,6 +157,14 @@ export const useSessionStore = create<SessionState & SessionActions>(
     progress: null,
     progressSessionId: null,
     defaultConfigPath: "configs/pentest.example.yaml",
+    subAgents: [],
+    subAgentsSessionId: null,
+    errorRecoveryStats: null,
+    errorRecoverySessionId: null,
+    currentPhase: null,
+    currentPhaseSessionId: null,
+    activeModel: null,
+    activeModelSessionId: null,
 
     // ── Actions ──
 
@@ -280,6 +322,38 @@ export const useSessionStore = create<SessionState & SessionActions>(
 
     setDefaultConfigPath: (path) => {
       set({ defaultConfigPath: path });
+    },
+
+    setSubAgents: (sessionId, subAgents) => {
+      set({ subAgents, subAgentsSessionId: sessionId });
+    },
+
+    upsertSubAgent: (sessionId, subAgent) => {
+      set((state) => {
+        if (sessionId !== state.subAgentsSessionId) {
+          return state;
+        }
+        const subAgents = [...state.subAgents];
+        const existing = subAgents.findIndex((s) => s.id === subAgent.id);
+        if (existing >= 0) {
+          subAgents[existing] = { ...subAgents[existing], ...subAgent };
+        } else {
+          subAgents.push(subAgent);
+        }
+        return { subAgents };
+      });
+    },
+
+    setErrorRecoveryStats: (sessionId, stats) => {
+      set({ errorRecoveryStats: stats, errorRecoverySessionId: sessionId });
+    },
+
+    setCurrentPhase: (sessionId, phase) => {
+      set({ currentPhase: phase, currentPhaseSessionId: sessionId });
+    },
+
+    setActiveModel: (sessionId, model) => {
+      set({ activeModel: model, activeModelSessionId: sessionId });
     },
   }),
 );

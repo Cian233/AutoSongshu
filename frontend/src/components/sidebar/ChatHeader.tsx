@@ -261,6 +261,22 @@ function SessionMetaChips({
   const busy = isSessionBusyStatus(session.status);
 
   const chips: Array<{ label: string; value: string; tone?: string }> = [
+    // Current phase chip
+    ...(session.current_phase
+      ? [{ label: "当前阶段", value: session.current_phase, tone: "status-running" }]
+      : []),
+    // Active model chip
+    ...(session.active_model
+      ? [{ label: "活跃模型", value: session.active_model, tone: "status-token" }]
+      : []),
+    // Sub-agents count chip
+    ...(session.sub_agents && session.sub_agents.length > 0
+      ? [{ label: "子 Agent", value: `${session.sub_agents.length} 个`, tone: "status-running" }]
+      : []),
+    // Historical experiences chip
+    ...(session.historical_experiences_count && session.historical_experiences_count > 0
+      ? [{ label: "历史经验", value: `${session.historical_experiences_count} 条` }]
+      : []),
     { label: "消息数", value: String(activeCount) },
     ...(compactedCount > 0
       ? [{ label: "已压缩", value: String(compactedCount), tone: "status-compacted" }]

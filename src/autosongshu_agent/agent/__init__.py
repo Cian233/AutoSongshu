@@ -10,6 +10,13 @@ from .context_manager import (
 )
 from .step_model import StepState, TaskState, TokenUsage, AgentStep
 from .trajectory import TrajectoryRecorder
+from .error_healing import (
+    ErrorHealingConfig,
+    ErrorRecoveryContext,
+    ErrorRecoveryStats,
+    ErrorHealingMixin,
+)
+from .long_term_memory import Experience, LongTermMemory
 
 __all__ = [
     "ConversationReply",
@@ -31,4 +38,10 @@ __all__ = [
     "TokenUsage",
     "AgentStep",
     "TrajectoryRecorder",
+    "ErrorHealingConfig",
+    "ErrorRecoveryContext",
+    "ErrorRecoveryStats",
+    "ErrorHealingMixin",
+    "Experience",
+    "LongTermMemory",
 ]

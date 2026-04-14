@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -17,6 +18,7 @@ from ..memory import (
 )
 from .harness import BaseAgentHarness
 from .coordinator import ConversationReply
+from .long_term_memory import LongTermMemory
 from .prompts import _CONTINUATION_PROMPT
 from .step_model import AgentStep, StepState, TaskState
 from .trajectory import TrajectoryRecorder
@@ -26,6 +28,8 @@ from .utils import (
     _extract_response_blocks,
     _prepare_user_message,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PentestConversationSession(BaseAgentHarness):
@@ -47,6 +51,97 @@ class PentestConversationSession(BaseAgentHarness):
         self.trajectory_recorder = TrajectoryRecorder(
             self.runtime.artifacts.path("trajectories")
         )
+        self._long_term_memory: LongTermMemory | None = None
+        self._historical_context: str = ""
+        self._init_long_term_memory()
+
+    def _init_long_term_memory(self) -> None:
+        try:
+            self._long_term_memory = LongTermMemory()
+            logger.info(
+                "Long-term memory initialized with %d experiences",
+                self._long_term_memory.get_experience_count(),
+            )
+        except Exception as e:
+            logger.warning("Failed to initialize long-term memory: %s", e)
+            self._long_term_memory = None
+
+    def _load_historical_experiences(self, target_url: str) -> str:
+        if self._long_term_memory is None:
+            return ""
+
+        try:
+            experiences = self._long_term_memory.retrieve_relevant_experience(
+                target=target_url,
+                limit=3,
+            )
+            if not experiences:
+                logger.info("No relevant historical experiences found for target: %s", target_url)
+                return ""
+
+            context = self._long_term_memory.render_experiences_for_prompt(experiences)
+            logger.info(
+                "Loaded %d relevant historical experiences for target: %s",
+                len(experiences),
+                target_url,
+            )
+            return context
+        except Exception as e:
+            logger.warning("Failed to load historical experiences: %s", e)
+            return ""
+
+    def _save_to_long_term_memory(self) -> None:
+        if self._long_term_memory is None:
+            return
+
+        try:
+            findings = []
+            if hasattr(self.runtime, "findings"):
+                for finding in self.runtime.findings.list():
+                    findings.append(finding.model_dump())
+
+            successful_strategies = []
+            failed_approaches = []
+            lessons_learned = ""
+
+            trajectory_summary = self.trajectory_recorder.summary()
+            if trajectory_summary.get("succeeded", 0) > 0:
+                successful_strategies.append(
+                    f"Completed {trajectory_summary['succeeded']} successful steps"
+                )
+            if trajectory_summary.get("failed", 0) > 0:
+                failed_approaches.append(
+                    f"Encountered {trajectory_summary['failed']} failed steps"
+                )
+
+            vulnerability_types = list(
+                set(f.get("cwe", "") or f.get("title", "") for f in findings if f)
+            )
+            vulnerability_types = [v for v in vulnerability_types if v]
+
+            target_info = {
+                "target_url": self.config.engagement.start_url,
+                "target_type": "web_app",
+                "tech_stack": [],
+                "vulnerability_types": vulnerability_types,
+            }
+
+            strategies = {
+                "successful": successful_strategies,
+                "failed": failed_approaches,
+                "lessons_learned": lessons_learned,
+            }
+
+            session_id = self.runtime.artifacts.session_dir.name
+            self._long_term_memory.store_experience(
+                session_id=session_id,
+                findings=findings,
+                strategies=strategies,
+                target_info=target_info,
+            )
+            logger.info("Saved session experience to long-term memory: %s", session_id)
+        except Exception as e:
+            logger.warning("Failed to save experience to long-term memory: %s", e)
 
     async def observe_history_async(self, messages: list[Msg]) -> None:
         if not messages:

@@ -171,12 +171,34 @@ class SkillScriptRunner:
                 }
             except subprocess.TimeoutExpired as exc:
                 duration_sec = round(time.monotonic() - started, 3)
+                # Kill the process tree to prevent orphan processes
+                # (inspired by OpenCode's process cleanup strategy)
+                try:
+                    if exc.pid is not None:
+                        if sys.platform == "win32":
+                            subprocess.run(
+                                ["taskkill", "/F", "/T", "/PID", str(exc.pid)],
+                                capture_output=True,
+                                timeout=5,
+                            )
+                        else:
+                            import signal
+                            os.killpg(os.getpgid(exc.pid), signal.SIGKILL)
+                except Exception as kill_exc:
+                    # Log but don't fail - the timeout already happened
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Failed to kill process tree for skill %s: %s",
+                        skill_name,
+                        kill_exc,
+                    )
+
                 result = {
                     "ok": False,
                     "exit_code": None,
                     "stdout": exc.stdout or "",
-                    "stderr": exc.stderr
-                    or f"Command timed out after {timeout_sec} seconds.",
+                    "stderr": (exc.stderr or "")
+                    + f"\n\nCommand timed out after {timeout_sec} seconds. Process tree terminated.",
                     "timed_out": True,
                     "duration_sec": duration_sec,
                 }

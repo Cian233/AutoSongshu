@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -324,8 +325,11 @@ __all__ = [
     "get_compact_continuation_message",
     "infer_pending_work",
     "MessageImportance",
+    "MessageImportanceScorer",
     "score_message_importance",
     "select_messages_for_compaction",
+    "SemanticChunker",
+    "Chunk",
 ]
 
 
@@ -456,6 +460,381 @@ def select_messages_for_compaction(
     compact_msgs.sort(key=lambda m: m.get("index", 0))
 
     return keep_msgs, compact_msgs
+
+
+# ── Message Importance Scorer Class ───────────────────────────────
+
+@dataclass
+class MessageImportanceScorer:
+    """Calculates importance scores for conversation messages.
+
+    Scoring factors:
+    - Time decay: recent messages are more important (0.0-0.3)
+    - Role weight: user/assistant/system have different base weights (0.0-0.2)
+    - Content value: findings, errors, code are more valuable (0.0-0.3)
+    - Structural importance: summaries, key decisions are important (0.0-0.2)
+    """
+
+    time_decay_rate: float = 0.05
+    role_weights: dict[str, float] = field(default_factory=lambda: {
+        "system": 0.2,
+        "user": 0.15,
+        "assistant": 0.1,
+        "tool": 0.05,
+    })
+    content_value_weight: float = 0.3
+    structural_weight: float = 0.2
+    time_decay_weight: float = 0.3
+
+    _finding_keywords: tuple[str, ...] = (
+        "发现", "漏洞", "vulnerability", "finding", "confirmed",
+        "validated", "成功", "success", "检测到", "identified",
+        "exploit", "注入", "injection", "xss", "sql injection",
+        "ssrf", "rce", "认证", "auth", "权限", "permission",
+        "error", "exception", "failed", "失败", "错误",
+    )
+
+    _code_indicators: tuple[str, ...] = (
+        "```", "def ", "class ", "function ", "import ",
+        "const ", "let ", "var ", "return ",
+    )
+
+    _structural_keywords: tuple[str, ...] = (
+        "summary", "总结", "结论", "conclusion", "decision",
+        "决定", "key point", "关键", "important", "重要",
+        "todo", "next step", "下一步", "pending", "待办",
+    )
+
+    def score(self, message: dict[str, Any], total_messages: int = 1) -> float:
+        """Calculate importance score for a message.
+
+        Args:
+            message: Message dict with 'role', 'content', and optionally 'index'.
+            total_messages: Total number of messages for time decay calculation.
+
+        Returns:
+            Float score between 0.0 (least important) and 1.0 (most important).
+        """
+        idx = message.get("index", 0)
+        role = message.get("role", "assistant")
+        content = message.get("content", "")
+
+        time_score = self._calculate_time_decay(idx, total_messages)
+        role_score = self._calculate_role_weight(role)
+        content_score = self._calculate_content_value(content)
+        structural_score = self._calculate_structural_importance(content)
+
+        total = (
+            self.time_decay_weight * time_score
+            + self.role_weights.get(role, 0.1)
+            + self.content_value_weight * content_score
+            + self.structural_weight * structural_score
+        )
+
+        return min(1.0, max(0.0, total))
+
+    def _calculate_time_decay(self, index: int, total: int) -> float:
+        if total <= 1:
+            return 1.0
+        recency = index / (total - 1)
+        return 1.0 - math.exp(-self.time_decay_rate * total * recency)
+
+    def _calculate_role_weight(self, role: str) -> float:
+        return self.role_weights.get(role.lower(), 0.05)
+
+    def _calculate_content_value(self, content: str) -> float:
+        if not content:
+            return 0.0
+
+        content_lower = content.lower()
+        score = 0.0
+
+        finding_count = sum(
+            1 for kw in self._finding_keywords if kw in content_lower
+        )
+        score += min(0.15, finding_count * 0.03)
+
+        code_count = sum(
+            1 for indicator in self._code_indicators if indicator in content
+        )
+        score += min(0.1, code_count * 0.02)
+
+        content_length = len(content)
+        if content_length > 100:
+            score += 0.05
+        if content_length > 500:
+            score += 0.05
+
+        return min(1.0, score)
+
+    def _calculate_structural_importance(self, content: str) -> float:
+        if not content:
+            return 0.0
+
+        content_lower = content.lower()
+        score = 0.0
+
+        keyword_count = sum(
+            1 for kw in self._structural_keywords if kw in content_lower
+        )
+        score += min(0.1, keyword_count * 0.02)
+
+        if content.startswith("<summary>") or content.startswith("## "):
+            score += 0.1
+
+        if re.search(r"^(结论|总结|发现|决定|decision|conclusion|finding)", content, re.IGNORECASE):
+            score += 0.1
+
+        return min(1.0, score)
+
+
+# ── Semantic Chunker ──────────────────────────────────────────────
+
+@dataclass
+class Chunk:
+    """A semantic chunk of messages."""
+
+    messages: list[dict[str, Any]]
+    chunk_type: str = "general"
+    importance: float = 0.5
+    summary: str = ""
+    token_estimate: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "messages": self.messages,
+            "chunk_type": self.chunk_type,
+            "importance": self.importance,
+            "summary": self.summary,
+            "token_estimate": self.token_estimate,
+        }
+
+
+@dataclass
+class SemanticChunker:
+    """Groups messages by semantic relevance rather than character count.
+
+    Preserves high-entropy content (findings, configurations, error stacks)
+    and compresses low-entropy content (greetings, repeated confirmations).
+    """
+
+    max_chunk_tokens: int = 4000
+    min_chunk_size: int = 2
+    max_chunk_size: int = 20
+
+    _high_entropy_keywords: tuple[str, ...] = (
+        "vulnerability", "漏洞", "finding", "发现", "exploit",
+        "error", "exception", "failed", "失败", "错误",
+        "configuration", "config", "配置", "token", "password",
+        "credential", "认证", "权限", "permission", "access",
+        "sql injection", "xss", "ssrf", "rce", "csrf",
+        "http://", "https://", "://", "192.168.", "10.0.",
+    )
+
+    _low_entropy_keywords: tuple[str, ...] = (
+        "hello", "hi", "thanks", "thank you", "好的", "收到",
+        "understood", "ok", "sure", "没问题", "明白",
+        "i will", "let me", "我会", "我将",
+        "is there anything", "还有什么", "need help", "需要帮助",
+    )
+
+    _semantic_boundary_keywords: tuple[str, ...] = (
+        "new task", "new objective", "新任务", "新目标",
+        "switching to", "切换到", "phase", "阶段",
+        "step", "步骤", "now let's", "现在我们",
+    )
+
+    def chunk(
+        self,
+        messages: list[dict[str, Any]],
+        budget: int | None = None,
+    ) -> list[Chunk]:
+        """Chunk messages by semantic relevance.
+
+        Args:
+            messages: List of message dicts.
+            budget: Optional token budget limit. Chunks exceeding budget are summarized.
+
+        Returns:
+            List of Chunk objects grouped by semantic relevance.
+        """
+        if not messages:
+            return []
+
+        max_tokens = budget or self.max_chunk_tokens
+        chunks: list[Chunk] = []
+        current_chunk_messages: list[dict[str, Any]] = []
+        current_chunk_type = "general"
+        current_entropy = 0.0
+
+        for i, message in enumerate(messages):
+            content = message.get("content", "")
+            msg_entropy = self._calculate_entropy(content)
+            msg_type = self._classify_message(content)
+
+            should_break = (
+                self._is_semantic_boundary(content)
+                or len(current_chunk_messages) >= self.max_chunk_size
+                or (msg_type != current_chunk_type and len(current_chunk_messages) >= self.min_chunk_size)
+            )
+
+            if should_break and current_chunk_messages:
+                chunk = self._finalize_chunk(
+                    current_chunk_messages,
+                    current_chunk_type,
+                    current_entropy / max(len(current_chunk_messages), 1),
+                )
+                chunks.append(chunk)
+                current_chunk_messages = []
+                current_entropy = 0.0
+
+            current_chunk_messages.append(message)
+            current_chunk_type = msg_type
+            current_entropy += msg_entropy
+
+        if current_chunk_messages:
+            chunk = self._finalize_chunk(
+                current_chunk_messages,
+                current_chunk_type,
+                current_entropy / max(len(current_chunk_messages), 1),
+            )
+            chunks.append(chunk)
+
+        return self._apply_budget_constraint(chunks, max_tokens)
+
+    def _calculate_entropy(self, content: str) -> float:
+        if not content:
+            return 0.0
+
+        content_lower = content.lower()
+        entropy = 0.0
+
+        high_entropy_count = sum(
+            1 for kw in self._high_entropy_keywords if kw in content_lower
+        )
+        entropy += high_entropy_count * 0.15
+
+        low_entropy_count = sum(
+            1 for kw in self._low_entropy_keywords if kw in content_lower
+        )
+        entropy -= low_entropy_count * 0.1
+
+        unique_chars = len(set(content))
+        total_chars = max(len(content), 1)
+        uniqueness_ratio = unique_chars / total_chars
+        entropy += uniqueness_ratio * 0.2
+
+        if "```" in content:
+            entropy += 0.2
+        if "\n" in content and content.count("\n") > 3:
+            entropy += 0.1
+
+        return max(0.0, entropy)
+
+    def _classify_message(self, content: str) -> str:
+        if not content:
+            return "general"
+
+        content_lower = content.lower()
+
+        if any(kw in content_lower for kw in self._high_entropy_keywords):
+            return "high_value"
+
+        if any(kw in content_lower for kw in self._low_entropy_keywords):
+            return "low_value"
+
+        if self._is_semantic_boundary(content):
+            return "boundary"
+
+        return "general"
+
+    def _is_semantic_boundary(self, content: str) -> bool:
+        if not content:
+            return False
+        content_lower = content.lower()
+        return any(kw in content_lower for kw in self._semantic_boundary_keywords)
+
+    def _finalize_chunk(
+        self,
+        messages: list[dict[str, Any]],
+        chunk_type: str,
+        avg_entropy: float,
+    ) -> Chunk:
+        total_content = " ".join(
+            m.get("content", "") for m in messages
+        )
+        token_est = estimate_transcript_tokens(total_content)
+
+        summary = ""
+        if chunk_type == "low_value":
+            summary = self._compress_low_entropy(messages)
+        elif chunk_type == "high_value":
+            summary = self._extract_high_value_snippets(messages)
+
+        return Chunk(
+            messages=messages,
+            chunk_type=chunk_type,
+            importance=min(1.0, avg_entropy),
+            summary=summary,
+            token_estimate=token_est,
+        )
+
+    def _compress_low_entropy(self, messages: list[dict[str, Any]]) -> str:
+        roles_seen: set[str] = set()
+        for msg in messages:
+            roles_seen.add(msg.get("role", "unknown"))
+
+        return f"[{len(messages)} messages compressed: {'; '.join(sorted(roles_seen))}]"
+
+    def _extract_high_value_snippets(self, messages: list[dict[str, Any]]) -> str:
+        snippets: list[str] = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if len(content) > 50:
+                sentence_end = min(
+                    content.find("。"),
+                    content.find("."),
+                    content.find("\n"),
+                    120,
+                )
+                if sentence_end <= 0:
+                    sentence_end = min(120, len(content))
+                snippet = content[:sentence_end].strip()
+                if snippet:
+                    snippets.append(snippet)
+        return " | ".join(snippets[:3])
+
+    def _apply_budget_constraint(
+        self,
+        chunks: list[Chunk],
+        max_tokens: int,
+    ) -> list[Chunk]:
+        total_tokens = sum(c.token_estimate for c in chunks)
+        if total_tokens <= max_tokens:
+            return chunks
+
+        sorted_by_importance = sorted(chunks, key=lambda c: c.importance)
+
+        result: list[Chunk] = []
+        accumulated_tokens = 0
+
+        for chunk in reversed(sorted_by_importance):
+            if accumulated_tokens + chunk.token_estimate <= max_tokens:
+                result.append(chunk)
+                accumulated_tokens += chunk.token_estimate
+            else:
+                compressed = Chunk(
+                    messages=chunk.messages,
+                    chunk_type="compressed",
+                    importance=chunk.importance,
+                    summary=chunk.summary or self._compress_low_entropy(chunk.messages),
+                    token_estimate=len(chunk.summary) // 3,
+                )
+                result.append(compressed)
+                accumulated_tokens += compressed.token_estimate
+
+        result.reverse()
+        return result
 
 
 # ── LLM-Driven Semantic Compaction ────────────────────────────────

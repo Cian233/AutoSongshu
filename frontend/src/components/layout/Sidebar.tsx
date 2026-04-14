@@ -6,6 +6,7 @@ import { Settings, Moon, Sun, Plus, Layers, PanelLeftClose } from "lucide-react"
 import { useUIStore } from "../../stores/use-ui-store";
 import { cn } from "../../lib/cn";
 import { toggleSidebar } from "./AppShell";
+import { ProjectWorkspacePanel } from "../sidebar/ProjectWorkspacePanel";
 import type { ReactNode } from "react";
 
 interface SidebarProps {
@@ -134,6 +135,11 @@ export function Sidebar({ sessionList, onNewChat, className }: SidebarProps) {
       {/* ── Session List ── */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         {sessionList}
+      </div>
+
+      {/* ── Project Workspace ── */}
+      <div className="border-t border-[var(--border)] pt-4">
+        <ProjectWorkspacePanel />
       </div>
     </div>
   );

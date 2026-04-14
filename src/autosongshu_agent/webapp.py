@@ -1275,6 +1275,100 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=_safe_error_detail(exc)) from exc
 
+    # --- Project workspace file management ---
+    @app.get("/api/projects/{project_id}/workspace")
+    async def list_workspace_files(project_id: str) -> dict[str, Any]:
+        """List all files in the project workspace as a tree structure."""
+        try:
+            config = get_cached_config()
+            workspace_root = Path(config.project.workspace_dir).resolve()
+            if not workspace_root.exists():
+                return {"files": [], "project_id": project_id, "workspace_dir": str(workspace_root)}
+
+            def build_tree(directory: Path) -> list[dict[str, Any]]:
+                items = []
+                try:
+                    entries = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+                except PermissionError:
+                    return items
+                for entry in entries:
+                    if entry.name.startswith("."):
+                        continue
+                    item: dict[str, Any] = {
+                        "name": entry.name,
+                        "path": str(entry.relative_to(workspace_root)),
+                        "is_directory": entry.is_dir(),
+                    }
+                    if entry.is_file():
+                        item["size"] = entry.stat().st_size
+                    else:
+                        item["children"] = build_tree(entry)
+                    items.append(item)
+                return items
+
+            files = build_tree(workspace_root)
+            return {"files": files, "project_id": project_id, "workspace_dir": str(workspace_root)}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/projects/{project_id}/workspace/upload")
+    async def upload_workspace_file(
+        project_id: str,
+        file: UploadFile = File(...),
+        path: str = Form(default=""),
+    ) -> dict[str, Any]:
+        """Upload a file to the project workspace."""
+        try:
+            config = get_cached_config()
+            workspace_root = Path(config.project.workspace_dir).resolve()
+            workspace_root.mkdir(parents=True, exist_ok=True)
+
+            target_path = workspace_root / path if path else workspace_root / file.filename
+            target_path = target_path.resolve()
+
+            if not target_path.is_relative_to(workspace_root):
+                raise HTTPException(status_code=400, detail="Invalid path: outside workspace")
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            content = await file.read()
+            target_path.write_bytes(content)
+
+            return {
+                "success": True,
+                "path": str(target_path.relative_to(workspace_root)),
+                "size": len(content),
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.delete("/api/projects/{project_id}/workspace")
+    async def delete_workspace_file(project_id: str, path: str) -> dict[str, Any]:
+        """Delete a file or directory from the project workspace."""
+        try:
+            config = get_cached_config()
+            workspace_root = Path(config.project.workspace_dir).resolve()
+            target_path = (workspace_root / path).resolve()
+
+            if not target_path.is_relative_to(workspace_root):
+                raise HTTPException(status_code=400, detail="Invalid path: outside workspace")
+
+            if not target_path.exists():
+                raise HTTPException(status_code=404, detail="File not found")
+
+            if target_path.is_dir():
+                import shutil
+                shutil.rmtree(target_path)
+            else:
+                target_path.unlink()
+
+            return {"success": True, "path": path}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     # --- SPA fallback: any unmatched non-API route returns index.html ---
     @app.get("/{full_path:path}", response_class=HTMLResponse)
     async def spa_fallback(request: Request, full_path: str) -> HTMLResponse:

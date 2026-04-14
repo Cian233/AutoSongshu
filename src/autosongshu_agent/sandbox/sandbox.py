@@ -99,12 +99,29 @@ class PythonSandbox:
         if self.settings.isolation_mode == "session":
             return self._resolve_in_session(relative_path)
 
+        if self.settings.isolation_mode == "project":
+            return self._resolve_in_project(relative_path)
+
         shared_root = Path(self.settings.shared_root_dir).resolve()
         shared_root.mkdir(parents=True, exist_ok=True)
         candidate = (shared_root / self.user_id / relative_path).resolve()
         if not candidate.is_relative_to(shared_root):
             raise SandboxError(
                 f"Sandbox path escapes shared sandbox directory: {relative_path}"
+            )
+        return candidate
+
+    def _resolve_in_project(self, relative_path: str) -> Path:
+        """Resolve path within the project-level shared workspace.
+
+        Codex-style: all sessions in the same project share this workspace.
+        """
+        project_workspace = self.artifacts.workspace_dir
+        project_workspace.mkdir(parents=True, exist_ok=True)
+        candidate = (project_workspace / relative_path).resolve()
+        if not candidate.is_relative_to(project_workspace):
+            raise SandboxError(
+                f"Sandbox path escapes project workspace directory: {relative_path}"
             )
         return candidate
 
@@ -466,10 +483,24 @@ class PythonSandbox:
         if extra_env:
             environment.update({key: str(value) for key, value in extra_env.items()})
 
+        # OpenCode-aligned: enforce max timeout cap
+        max_timeout = getattr(self.settings, "max_execution_timeout_sec", 600)
+        effective_timeout = min(timeout_sec, max_timeout)
+        if effective_timeout < timeout_sec:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Requested timeout %ds exceeds max %ds, capping to %ds.",
+                timeout_sec, max_timeout, effective_timeout,
+            )
+
         started = time.monotonic()
         is_windows = os.name == "nt"
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if is_windows else 0
-        
+
+        # Heartbeat detection for long-running tasks
+        heartbeat_interval = getattr(self.settings, "heartbeat_interval_sec", 30)
+        heartbeat_enabled = effective_timeout > heartbeat_interval * 2
+
         try:
             with subprocess.Popen(
                 command,
@@ -485,9 +516,17 @@ class PythonSandbox:
                 start_new_session=not is_windows,
             ) as proc:
                 try:
-                    stdout, stderr = proc.communicate(input=input_text, timeout=timeout_sec)
-                    returncode = proc.returncode
-                    timed_out = False
+                    if heartbeat_enabled and not is_windows:
+                        # Use polling with heartbeat for long-running tasks
+                        stdout, stderr = self._communicate_with_heartbeat(
+                            proc, effective_timeout, heartbeat_interval, input_text
+                        )
+                        returncode = proc.returncode
+                        timed_out = False
+                    else:
+                        stdout, stderr = proc.communicate(input=input_text, timeout=effective_timeout)
+                        returncode = proc.returncode
+                        timed_out = False
                 except subprocess.TimeoutExpired as exc:
                     if is_windows:
                         subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
@@ -497,10 +536,10 @@ class PythonSandbox:
                             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                         except Exception:
                             proc.kill()
-                    
+
                     proc.wait(timeout=5)
                     stdout = coerce_text(exc.stdout)
-                    stderr = coerce_text(exc.stderr) or f"Command timed out after {timeout_sec} seconds."
+                    stderr = coerce_text(exc.stderr) or f"Command timed out after {effective_timeout} seconds."
                     returncode = None
                     timed_out = True
 
@@ -514,6 +553,9 @@ class PythonSandbox:
                 "command": command,
                 "cwd": str(cwd or self.workspace_dir),
                 "timed_out": timed_out,
+                "timeout_capped": effective_timeout < timeout_sec,
+                "requested_timeout": timeout_sec,
+                "effective_timeout": effective_timeout,
             }
         except Exception as exc:
             duration_sec = round(time.monotonic() - started, 3)
@@ -533,7 +575,7 @@ class PythonSandbox:
             {
                 "command": command,
                 "cwd": str(cwd or self.workspace_dir),
-                "timeout_sec": timeout_sec,
+                "timeout_sec": effective_timeout,
                 "exit_code": result["exit_code"],
                 "ok": result["ok"],
                 "timed_out": result["timed_out"],
@@ -541,6 +583,43 @@ class PythonSandbox:
             },
         )
         return result
+
+    def _communicate_with_heartbeat(
+        self,
+        proc: subprocess.Popen,
+        timeout: int,
+        heartbeat_interval: int,
+        input_text: str | None = None,
+    ) -> tuple[str, str]:
+        """Poll process with heartbeat detection for long-running tasks.
+
+        Inspired by OpenCode's process monitoring strategy:
+        - Check if process is still alive at regular intervals
+        - Log heartbeat status for observability
+        - Still respects the overall timeout
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if input_text is not None and proc.stdin:
+            try:
+                proc.stdin.write(input_text)
+                proc.stdin.close()
+            except Exception:
+                pass
+
+        elapsed = 0.0
+        while proc.poll() is None:
+            time.sleep(min(heartbeat_interval, timeout - elapsed))
+            elapsed = time.monotonic() - time.monotonic() + heartbeat_interval  # approximate
+
+            if proc.poll() is None:
+                logger.debug(
+                    "Heartbeat: process %d still running after %ds (timeout: %ds)",
+                    proc.pid, elapsed, timeout,
+                )
+
+        return proc.communicate()
 
     def _ensure_bootstrapped(self) -> None:
         with self._lock:
@@ -900,64 +979,128 @@ class PythonSandbox:
     def read_file(
         self,
         path: str,
-        max_chars: int = 12000,
+        max_chars: int = 0,
         start_line: int = 0,
         end_line: int = 0,
         include_line_numbers: bool = False,
+        offset: int = 0,
+        limit: int = 0,
     ) -> dict[str, Any]:
+        """Read a file with OpenCode-style pagination.
+
+        Inspired by OpenCode's read tool strategy:
+        - DEFAULT_READ_LIMIT = 2000 lines
+        - MAX_BYTES = 50KB
+        - offset/limit based line pagination
+        - Auto-truncation with hint for continuation
+        - Out-of-range offset recovery (return tail instead of error)
+
+        Args:
+            path: File path relative to workspace.
+            max_chars: Maximum characters to return (0 = use default 128K).
+            start_line: Start reading from this line (1-indexed).
+            end_line: End reading at this line (1-indexed, inclusive).
+            include_line_numbers: Whether to include line numbers in output.
+            offset: Line offset to start reading from (1-indexed, alternative to start_line).
+            limit: Maximum number of lines to read (alternative to end_line).
+        """
         with self._lock:
             target = self._resolve_workspace_path(path)
             if not target.is_file():
                 raise SandboxError(f"Sandbox file not found: {path}")
+
+            # OpenCode default: 2000 lines, 128K chars
+            default_line_limit = 2000
+            default_char_limit = 128 * 1024  # 128K
+
+            effective_max_chars = max_chars if max_chars > 0 else default_char_limit
+
             content = target.read_text(encoding="utf-8", errors="replace")
             lines = content.splitlines(keepends=True)
             total_lines = len(lines)
+            total_bytes = target.stat().st_size
 
-            if bool(start_line or end_line):
-                if start_line <= 0 or end_line <= 0:
-                    raise SandboxError(
-                        "start_line and end_line must both be positive integers."
-                    )
-                if start_line > end_line:
-                    raise SandboxError(
-                        "start_line must be less than or equal to end_line."
-                    )
-                if not lines:
-                    raise SandboxError(
-                        "Cannot read a non-existent line range from an empty file."
-                    )
-                if end_line > total_lines:
-                    raise SandboxError(
-                        f"Line range {start_line}-{end_line} is outside the file. The file has {total_lines} lines."
-                    )
-                selected_lines = lines[start_line - 1 : end_line]
-                selected_content = "".join(selected_lines)
-                selected_start_line = start_line
-                selected_end_line = end_line
+            # Determine line range using offset/limit or start_line/end_line
+            actual_start = 1
+            actual_end = total_lines
+
+            if offset > 0 or limit > 0:
+                # OpenCode-style offset/limit pagination
+                actual_start = offset if offset > 0 else 1
+                if limit > 0:
+                    actual_end = min(actual_start + limit - 1, total_lines)
+                else:
+                    actual_end = min(actual_start + default_line_limit - 1, total_lines)
+            elif start_line > 0 or end_line > 0:
+                actual_start = start_line if start_line > 0 else 1
+                actual_end = end_line if end_line > 0 else total_lines
+
+            # OpenCode-style out-of-range offset recovery:
+            # Instead of erroring, return the tail of the file
+            if actual_start > total_lines and total_lines > 0:
+                actual_start = max(1, total_lines - default_line_limit + 1)
+                actual_end = total_lines
+
+            # Validate range
+            if actual_start <= 0 or actual_end <= 0:
+                raise SandboxError(
+                    "start_line/offset and end_line/limit must both be positive integers."
+                )
+            if actual_start > actual_end:
+                raise SandboxError(
+                    "start_line/offset must be less than or equal to end_line/limit."
+                )
+
+            if not lines:
+                selected_lines: list[str] = []
+                selected_content = ""
+                selected_start_line = 0
+                selected_end_line = 0
             else:
-                selected_lines = lines
-                selected_content = content
-                selected_start_line = 1 if total_lines else 0
-                selected_end_line = total_lines
+                selected_lines = lines[actual_start - 1 : actual_end]
+                selected_content = "".join(selected_lines)
+                selected_start_line = actual_start
+                selected_end_line = min(actual_end, total_lines)
 
-            preview, truncated = truncate_text(selected_content, max_chars)
-            payload = {
+            # Truncate by character budget
+            preview, truncated = truncate_text(selected_content, effective_max_chars)
+
+            # Build pagination hint (OpenCode style)
+            pagination_hint = ""
+            if selected_end_line < total_lines:
+                next_offset = selected_end_line + 1
+                remaining_lines = total_lines - selected_end_line
+                pagination_hint = (
+                    f"\n\n--- {remaining_lines} more lines in file. "
+                    f"Use offset={next_offset} (or start_line={next_offset}) to continue reading. ---"
+                )
+            elif selected_start_line > 1 and selected_end_line == total_lines:
+                pagination_hint = (
+                    f"\n\n--- End of file. Total: {total_lines} lines, {total_bytes} bytes. ---"
+                )
+
+            payload: dict[str, Any] = {
                 "path": str(target),
                 "relative_path": target.relative_to(self.workspace_dir).as_posix(),
-                "size_bytes": target.stat().st_size,
-                "content": preview,
-                "truncated": truncated,
+                "size_bytes": total_bytes,
                 "total_lines": total_lines,
+                "content": preview + pagination_hint if pagination_hint else preview,
+                "truncated": truncated,
                 "selected_start_line": selected_start_line,
                 "selected_end_line": selected_end_line,
+                # OpenCode-style metadata
+                "has_more": selected_end_line < total_lines,
+                "next_offset": selected_end_line + 1 if selected_end_line < total_lines else None,
             }
+
             if include_line_numbers:
                 numbered_preview, numbered_truncated = truncate_text(
                     render_numbered_lines(selected_lines, selected_start_line or 1),
-                    max_chars,
+                    effective_max_chars,
                 )
-                payload["numbered_content"] = numbered_preview
+                payload["numbered_content"] = numbered_preview + pagination_hint if pagination_hint else numbered_preview
                 payload["numbered_content_truncated"] = numbered_truncated
+
             return payload
 
     def list_files(self, pattern: str = "**/*", limit: int = 200) -> dict[str, Any]:

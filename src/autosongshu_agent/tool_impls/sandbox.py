@@ -98,12 +98,30 @@ def sandbox_multiedit_file(
 def sandbox_read_file(
     runtime: PentestRuntime,
     path: str,
-    max_chars: int = 12000,
+    max_chars: int = 0,
     start_line: int = 0,
     end_line: int = 0,
     include_line_numbers: bool = False,
+    offset: int = 0,
+    limit: int = 0,
 ) -> ToolResponse:
-    """Read a UTF-8 text file from the sandbox workspace. Use include_line_numbers=true and an optional line range before line-based edits."""
+    """Read a UTF-8 text file from the sandbox workspace.
+
+    OpenCode-style large file handling:
+    - Default: reads up to 2000 lines (128K chars) at a time
+    - For files exceeding the limit: auto-truncates with a hint like
+      "--- 3500 more lines in file. Use offset=2001 to continue reading. ---"
+    - Use offset/limit for line-based pagination (OpenCode style)
+    - Use start_line/end_line for explicit line ranges
+    - Out-of-range offset recovers gracefully (returns tail of file)
+    - Use include_line_numbers=true before line-based edits
+
+    Examples:
+    - Read first 2000 lines: sandbox_read_file(path="large.py")
+    - Read lines 2001-4000: sandbox_read_file(path="large.py", offset=2001)
+    - Read 500 lines from offset 1000: sandbox_read_file(path="large.py", offset=1000, limit=500)
+    - Read specific range: sandbox_read_file(path="config.yaml", start_line=10, end_line=50)
+    """
     try:
         return _tool_response(
             runtime.sandbox.read_file(
@@ -112,6 +130,8 @@ def sandbox_read_file(
                 start_line=start_line,
                 end_line=end_line,
                 include_line_numbers=include_line_numbers,
+                offset=offset,
+                limit=limit,
             )
         )
     except Exception as exc:
@@ -145,18 +165,30 @@ def sandbox_run_python(
     script_path: str = "",
     args_json: str = "[]",
     env_json: str = "{}",
-    timeout_sec: int = 120,
+    timeout_sec: int = 0,  # 0 means use config default (120s, matches OpenCode)
     max_output_chars: int = 20000,
 ) -> ToolResponse:
-    """Run inline Python code or an existing sandbox script. If code is provided, it must be raw Python only, without markdown fences or narrative preambles. Prefer script_path for iterative payload work so the file can be updated with sandbox_edit_file or sandbox_multiedit_file between runs. Avoid rerunning identical code unless inputs or logic changed."""
+    """Run inline Python code or an existing sandbox script.
+
+    OpenCode-aligned timeout strategy:
+    - Default timeout: 120s (2 min, matches opencode's DEFAULT_TIMEOUT)
+    - Max timeout: 600s (10 min, enforced by sandbox)
+    - Heartbeat detection: checks every 30s for long-running tasks
+    - Output auto-truncated at 50KB / 2000 lines (opencode limits)
+
+    If code is provided, it must be raw Python only, without markdown fences or narrative preambles.
+    Prefer script_path for iterative payload work so the file can be updated with sandbox_edit_file
+    or sandbox_multiedit_file between runs. Avoid rerunning identical code unless inputs or logic changed.
+    """
     try:
+        effective_timeout = timeout_sec if timeout_sec > 0 else runtime.config.sandbox.execution_timeout_sec
         return _tool_response(
             runtime.sandbox.run_python(
                 code=code,
                 script_path=script_path,
                 args=_parse_json_list(args_json),
                 env={key: str(value) for key, value in _parse_json_object(env_json).items()},
-                timeout_sec=timeout_sec,
+                timeout_sec=effective_timeout,
                 max_output_chars=max_output_chars,
             ),
         )

@@ -57,6 +57,26 @@ class ModelConfig(BaseModel):
     )
 
 
+class SubAgentModelConfig(BaseModel):
+    """Independent model configuration for sub-agents."""
+    recon_model: str | None = Field(
+        default=None,
+        description="Model for reconnaissance sub-agent.",
+    )
+    scanner_model: str | None = Field(
+        default=None,
+        description="Model for vulnerability scanning sub-agent.",
+    )
+    exploit_model: str | None = Field(
+        default=None,
+        description="Model for exploit development sub-agent.",
+    )
+    report_model: str | None = Field(
+        default=None,
+        description="Model for report generation sub-agent.",
+    )
+
+
 class BrowserConfig(BaseModel):
     mode: Literal["launch", "connect_over_cdp"] = "launch"
     cdp_url: str | None = None
@@ -116,9 +136,20 @@ class SandboxConfig(BaseModel):
     workspace_subdir: str = "workspace"
     venv_subdir: str = ".venv"
     allow_package_install: bool = True
+    # OpenCode-aligned timeout strategy (inspired by opencode's bash tool timeout)
+    # Default bash timeout in opencode: 2 minutes (120s)
     bootstrap_timeout_sec: int = 120
     install_timeout_sec: int = 300
-    execution_timeout_sec: int = 120
+    execution_timeout_sec: int = 120  # Default: 2 min (matches opencode's DEFAULT_TIMEOUT)
+    max_execution_timeout_sec: int = 600  # Max allowed: 10 min (for heavy tasks)
+    # Output truncation (opencode: MAX_BYTES = 50KB, MAX_LINES = 2000)
+    max_output_bytes: int = 50 * 1024  # 50KB
+    max_output_lines: int = 2000
+    # Heartbeat detection (detect hung processes)
+    heartbeat_interval_sec: int = 30  # Check every 30s for long-running tasks
+    # Auto-retry on transient timeout
+    retry_on_timeout: bool = False  # Disabled by default for safety
+    max_timeout_retries: int = 1
     index_url: str | None = None
     extra_index_urls: list[str] = Field(default_factory=list)
     trusted_hosts: list[str] = Field(default_factory=list)
@@ -155,6 +186,10 @@ class AgentConfig(BaseModel):
     enable_meta_tool: bool = True
     loop_guard_enabled: bool = True
     mode: Literal["auto", "semi-auto"] = "auto"
+    # Timeout configuration (inspired by OpenCode's timeout strategy)
+    turn_timeout_sec: int = 600  # Per-turn timeout (10 min default, for complex reasoning)
+    tool_call_timeout_sec: int = 300  # Per-tool-call timeout (5 min default)
+    max_total_timeout_sec: int = 3600  # Max total session timeout (60 min default)
 
 
 class CompactionConfig(BaseModel):
@@ -164,10 +199,35 @@ class CompactionConfig(BaseModel):
     reserved_chars: int = 4000
     min_turns: int = 4
     retain_recent_turns: int = 2
+    # Large file handling
+    max_file_read_chars: int = 24000  # Increased from 12000 for large files
+    enable_chunked_read: bool = True  # Enable offset/limit based file reading
+
+
+class ProjectConfig(BaseModel):
+    """Project-level configuration for multi-session workspace sharing.
+
+    Inspired by Codex/OpenCode project-based architecture:
+    - One project can have multiple sessions
+    - All sessions share a project-level workspace (files, scripts, outputs)
+    - Each session has its own conversation artifacts (memory, trajectories)
+    - Sandbox venv is shared across all sessions in the project
+    """
+    project_id: str = ""  # Auto-generated if empty
+    name: str = ""
+    workspace_dir: str = "./workspace"  # Project-level shared workspace
+    artifacts_dir: str = "./artifacts"  # Project-level artifacts root
+    # Isolation mode for sandbox:
+    # - "session": each session has its own sandbox workspace (legacy)
+    # - "user": sandbox workspace shared by user (current default)
+    # - "project": sandbox workspace shared by project (Codex-style)
+    isolation_mode: Literal["session", "user", "project"] = "project"
 
 
 class AppConfig(BaseModel):
+    project: ProjectConfig = Field(default_factory=ProjectConfig)
     model: ModelConfig
+    sub_agent_models: SubAgentModelConfig = Field(default_factory=SubAgentModelConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     engagement: EngagementConfig
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
@@ -178,6 +238,8 @@ class AppConfig(BaseModel):
     mcp_servers: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def resolve_paths(self, base_dir: Path) -> "AppConfig":
+        self.project.workspace_dir = _resolve_path(base_dir, self.project.workspace_dir)
+        self.project.artifacts_dir = _resolve_path(base_dir, self.project.artifacts_dir)
         self.artifacts.root_dir = _resolve_path(base_dir, self.artifacts.root_dir)
         self.sandbox.shared_root_dir = _resolve_path(
             base_dir, self.sandbox.shared_root_dir
@@ -194,6 +256,7 @@ class AppConfig(BaseModel):
 
 __all__ = [
     "ModelConfig",
+    "SubAgentModelConfig",
     "BrowserConfig",
     "EngagementConfig",
     "SkillsConfig",
