@@ -21,6 +21,13 @@ class _MemoryConversation:
         reserved_chars: int = 4000,
         min_turns: int = 1,
         retain_recent_turns: int = 0,
+        context_window_tokens: int = 128000,
+        reserved_tokens: int = 8000,
+        compact_after_tokens: int = 90000,
+        compact_after_turns: int = 12,
+        keep_first_turns: int = 1,
+        keep_last_turns: int = 4,
+        use_token_counting: bool = False,
     ) -> None:
         self.config = SimpleNamespace(
             compaction=SimpleNamespace(
@@ -30,6 +37,13 @@ class _MemoryConversation:
                 reserved_chars=reserved_chars,
                 min_turns=min_turns,
                 retain_recent_turns=retain_recent_turns,
+                context_window_tokens=context_window_tokens,
+                reserved_tokens=reserved_tokens,
+                compact_after_tokens=compact_after_tokens,
+                compact_after_turns=compact_after_turns,
+                keep_first_turns=keep_first_turns,
+                keep_last_turns=keep_last_turns,
+                use_token_counting=use_token_counting,
             ),
         )
         self.runtime = SimpleNamespace(
@@ -92,10 +106,16 @@ class ChatManagerMemoryTests(unittest.TestCase):
         self.manager = ChatSessionManager(project_root=Path(self.temp_dir.name))
         self.addCleanup(self.manager.shutdown)
 
+    def _new_session(self, **kwargs) -> ChatSessionState:
+        payload = dict(kwargs)
+        if "project_id" in getattr(ChatSessionState, "__dataclass_fields__", {}):
+            payload.setdefault("project_id", "project-test")
+        return ChatSessionState(**payload)
+
     def test_ensure_conversation_ready_refreshes_memory_before_rebuilding_context(self) -> None:
         conversation = _MemoryConversation()
         self.manager._should_auto_compact_session = lambda *_args, **_kwargs: True
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0001",
             title="Memory compaction",
             config_path="E:/config.yaml",
@@ -123,7 +143,7 @@ class ChatManagerMemoryTests(unittest.TestCase):
     def test_process_turn_refreshes_memory_after_reply_completion(self) -> None:
         conversation = _MemoryConversation()
         self.manager._should_auto_compact_session = lambda *_args, **_kwargs: True
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0002",
             title="Post-turn memory",
             config_path="E:/config.yaml",
@@ -148,7 +168,7 @@ class ChatManagerMemoryTests(unittest.TestCase):
 
     def test_small_pending_history_does_not_auto_compact(self) -> None:
         conversation = _MemoryConversation()
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0004",
             title="No compact yet",
             config_path="E:/config.yaml",
@@ -172,7 +192,7 @@ class ChatManagerMemoryTests(unittest.TestCase):
             retain_recent_turns=2,
         )
         self.manager._auto_compaction_char_budget = lambda *_args, **_kwargs: 1
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0007",
             title="Retain recent turns",
             config_path="E:/config.yaml",
@@ -197,8 +217,158 @@ class ChatManagerMemoryTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in job.transcript_payload], ["u2", "a2"])
         self.assertEqual(job.anchor_message_id, "a2")
 
+    def test_token_budget_can_trigger_auto_compaction(self) -> None:
+        conversation = _MemoryConversation(
+            min_turns=1,
+            use_token_counting=True,
+            compact_after_tokens=1,
+        )
+        session = self._new_session(
+            session_id="chat-0008",
+            title="Token compaction",
+            config_path="E:/config.yaml",
+            conversation=conversation,
+        )
+        session.messages = [
+            ChatMessage(id="u1", role="user", content=[{"type": "input_text", "text": "hello"}], order_index=1),
+            ChatMessage(id="a1", role="assistant", content=[{"type": "output_text", "text": "world"}], order_index=2),
+        ]
+
+        should_compact = self.manager._should_auto_compact_session(session, session.messages)
+
+        self.assertTrue(should_compact)
+
+    def test_token_budget_can_skip_auto_compaction_when_not_reached(self) -> None:
+        conversation = _MemoryConversation(
+            min_turns=1,
+            use_token_counting=True,
+            compact_after_tokens=100000,
+        )
+        session = self._new_session(
+            session_id="chat-0009",
+            title="Token compaction off",
+            config_path="E:/config.yaml",
+            conversation=conversation,
+        )
+        session.messages = [
+            ChatMessage(id="u1", role="user", content=[{"type": "input_text", "text": "hello"}], order_index=1),
+            ChatMessage(id="a1", role="assistant", content=[{"type": "output_text", "text": "world"}], order_index=2),
+        ]
+
+        should_compact = self.manager._should_auto_compact_session(session, session.messages)
+
+        self.assertFalse(should_compact)
+
+    def test_prune_false_post_turn_refresh_does_not_physically_compact(self) -> None:
+        conversation = _MemoryConversation(prune=False, min_turns=1)
+        self.manager._should_auto_compact_session = lambda *_args, **_kwargs: True
+        session = self._new_session(
+            session_id="chat-0010",
+            title="No physical prune",
+            config_path="E:/config.yaml",
+            conversation=conversation,
+            memory=LayeredConversationMemory(anchor_message_id="a1"),
+        )
+        session.messages = [
+            ChatMessage(id="u1", role="user", content=[{"type": "input_text", "text": "first"}], order_index=1),
+            ChatMessage(id="a1", role="assistant", content=[{"type": "output_text", "text": "first result"}], order_index=2),
+            ChatMessage(id="u2", role="user", content=[{"type": "input_text", "text": "second"}], order_index=3),
+            ChatMessage(id="a2", role="assistant", content=[{"type": "output_text", "text": "second result"}], order_index=4),
+        ]
+        session.memory_refresh_revision = 1
+        self.manager.chat_sessions[session.session_id] = session
+
+        events: list[dict[str, object]] = []
+        listener_id = self.manager.add_listener(events.append)
+        self.addCleanup(self.manager.remove_listener, listener_id)
+
+        job = self.manager._build_memory_refresh_job(
+            session,
+            conversation,
+            revision=1,
+        )
+
+        self.assertIsNotNone(job)
+        assert job is not None
+        self.manager._run_post_turn_memory_refresh(job)
+
+        self.assertFalse(any(message.role == "system" for message in session.messages))
+        self.assertFalse(any(getattr(message, "compacted", False) for message in session.messages))
+        self.assertFalse(any(event.get("type") == "message.compacted" for event in events))
+        self.assertEqual(session.memory.handoff.status, "Compacted")
+
+    def test_prune_false_context_replays_system_and_compacted_messages(self) -> None:
+        if "compacted" not in getattr(ChatMessage, "__dataclass_fields__", {}):
+            self.skipTest("ChatMessage.compacted is unavailable in this runtime")
+
+        conversation = _MemoryConversation(prune=False)
+        session = self._new_session(
+            session_id="chat-0011",
+            title="No prune replay",
+            config_path="E:/config.yaml",
+            conversation=conversation,
+        )
+        session.messages = [
+            ChatMessage(
+                id="sys1",
+                role="system",
+                content=[{"type": "output_text", "text": "summary"}],
+                status="completed",
+                order_index=1,
+            ),
+            ChatMessage(
+                id="u1",
+                role="user",
+                content=[{"type": "input_text", "text": "first"}],
+                status="completed",
+                compacted=True,
+                order_index=2,
+            ),
+            ChatMessage(
+                id="a1",
+                role="assistant",
+                content=[{"type": "output_text", "text": "first result"}],
+                status="completed",
+                compacted=True,
+                order_index=3,
+            ),
+        ]
+
+        history = self.manager._context_history_messages(session)
+
+        self.assertEqual([message.id for message in history], ["sys1", "u1", "a1"])
+
+    def test_partial_fork_resets_memory_to_avoid_future_leak(self) -> None:
+        if not hasattr(self.manager, "fork_session"):
+            self.skipTest("fork_session is unavailable in this runtime")
+
+        source = self._new_session(
+            session_id="chat-0012",
+            title="Fork source",
+            config_path="E:/config.yaml",
+            memory=LayeredConversationMemory(
+                summary="future-only summary",
+                anchor_message_id="a2",
+            ),
+        )
+        source.messages = [
+            ChatMessage(id="u1", role="user", content=[{"type": "input_text", "text": "one"}], order_index=1),
+            ChatMessage(id="a1", role="assistant", content=[{"type": "output_text", "text": "one done"}], order_index=2),
+            ChatMessage(id="u2", role="user", content=[{"type": "input_text", "text": "two"}], order_index=3),
+            ChatMessage(id="a2", role="assistant", content=[{"type": "output_text", "text": "two done"}], order_index=4),
+        ]
+        self.manager.chat_sessions[source.session_id] = source
+
+        detail = self.manager.fork_session(source.session_id, message_index=1)
+        forked_id = str(detail.get("id") or detail.get("session_id") or "")
+        self.assertTrue(forked_id)
+        forked = self.manager.chat_sessions[forked_id]
+
+        self.assertEqual([message.id for message in forked.messages], ["u1", "a1"])
+        self.assertTrue(forked.memory.is_empty())
+
     def test_pinned_context_keeps_exact_target_url_from_first_turn(self) -> None:
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0003",
             title="Target URL memory",
             config_path="E:/config.yaml",
@@ -233,7 +403,7 @@ class ChatManagerMemoryTests(unittest.TestCase):
         self.assertIn("https://ctf.show", pinned)
 
     def test_pinned_context_keeps_recent_sandbox_script_paths(self) -> None:
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0006",
             title="Sandbox script memory",
             config_path="E:/config.yaml",
@@ -289,7 +459,7 @@ class ChatManagerMemoryTests(unittest.TestCase):
     def test_prune_false_replays_full_history_even_after_compaction(self) -> None:
         conversation = _MemoryConversation(prune=False)
         self.manager._should_auto_compact_session = lambda *_args, **_kwargs: True
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0005",
             title="No prune",
             config_path="E:/config.yaml",

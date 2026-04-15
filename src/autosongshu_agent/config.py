@@ -409,7 +409,7 @@ class ArtifactConfig(BaseModel):
 
 class SandboxConfig(BaseModel):
     enabled: bool = True
-    isolation_mode: Literal["session", "user"] = "user"
+    isolation_mode: Literal["session", "user", "project"] = "project"
     shared_root_dir: str = "./data/sandboxes"
     default_user_id: str = "local-default-user"
     root_subdir: str = "sandbox"

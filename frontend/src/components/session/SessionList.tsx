@@ -1,14 +1,8 @@
-// ── SessionList ─────────────────────────────────────────────────
-// Session list grouped by date, migrated from renderSessions().
-// Groups: today, yesterday, 7 days, 30 days, earlier.
-
 import { useMemo } from "react";
 import { useSessionStore } from "../../stores/use-session-store";
 import { useProjectStore } from "../../stores/use-project-store";
 import { SessionItem } from "./SessionItem";
 import { truncate, isSessionCompacting } from "../../lib/utils";
-
-// ── Date Grouping Helpers ──────────────────────────────────────
 
 type GroupKey = "today" | "yesterday" | "week" | "month" | "earlier";
 
@@ -68,8 +62,6 @@ function groupSessionsByDate(
   })).filter((group) => group.items.length > 0);
 }
 
-// ── Component ──────────────────────────────────────────────────
-
 export function SessionList() {
   const sessions = useSessionStore((s) => s.sessions);
   const selectedSessionId = useSessionStore((s) => s.selectedSessionId);
@@ -77,8 +69,10 @@ export function SessionList() {
   const selectedProjectId = useProjectStore((s) => s.selectedProjectId);
 
   const projectSessions = useMemo(() => {
-    if (!selectedProjectId) return sessions;
-    return sessions.filter((session) => String(session.project_id || "") === String(selectedProjectId));
+    if (!selectedProjectId) return [];
+    return sessions.filter(
+      (session) => String(session.project_id || "") === String(selectedProjectId),
+    );
   }, [sessions, selectedProjectId]);
 
   const groups = useMemo(() => groupSessionsByDate(projectSessions), [projectSessions]);
@@ -86,7 +80,7 @@ export function SessionList() {
   if (!projectSessions.length) {
     return (
       <div className="text-[var(--muted)] text-[var(--font-size-sm)] text-center py-8 px-4">
-        {selectedProjectId ? "当前项目暂无会话，发送第一条消息即可创建。" : "还没有会话。发送第一条消息后会自动创建新对话。"}
+        {selectedProjectId ? "当前项目暂无会话，发送第一条消息即可创建。" : "请先选择一个项目。"}
       </div>
     );
   }
@@ -95,12 +89,10 @@ export function SessionList() {
     <div className="flex flex-col gap-2">
       {groups.map((group) => (
         <section key={group.key} className="grid gap-2">
-          {/* Group Title */}
           <h3 className="m-0 px-2.5 text-[var(--muted)] text-[0.84rem] font-semibold">
             {group.label}
           </h3>
 
-          {/* Group Items */}
           <div className="grid gap-[3px]">
             {group.items.map((session) => {
               const isActive = String(session.id) === String(selectedSessionId);

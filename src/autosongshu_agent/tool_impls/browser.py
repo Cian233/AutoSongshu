@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from agentscope.tool import ToolResponse
@@ -108,8 +109,19 @@ def browser_screenshot(runtime: PentestRuntime, name: str = "page") -> ToolRespo
 
 @registry.register("browser-basic", dedupe=False)
 def view_image(runtime: PentestRuntime, path: str) -> ToolResponse:
-    """Load and view an image file (screenshot, downloaded image, etc.). The image will be sent to the model as a base64-encoded visual so you can analyze its content. Only call this tool when you actually need to *see* the image content -- do not use it just to confirm a file exists."""
-    return _image_response(path, description=f"Image: {path}")
+    """Load and view an image file (screenshot, downloaded image, etc.). The image will be sent to the model as a base64-encoded visual so you can analyze its content. Only call this tool when you actually need to *see* the image content -- do not use it just to confirm a file exists.
+
+    Path must be within the sandbox workspace directory for security.
+    """
+    try:
+        # Validate path is within sandbox workspace
+        target = Path(path).resolve()
+        workspace = runtime.sandbox.workspace_dir.resolve()
+        if not str(target).startswith(str(workspace)):
+            return _error_response(ValueError(f"Path must be within sandbox workspace: {workspace}"))
+        return _image_response(path, description=f"Image: {path}")
+    except Exception as exc:
+        return _error_response(exc)
 
 @registry.register("browser-basic", dedupe=False)
 def browser_wait_for_load_state(runtime: PentestRuntime, state: str = "networkidle", timeout_ms: int = 5000) -> ToolResponse:
@@ -208,11 +220,22 @@ def browser_go_forward(runtime: PentestRuntime) -> ToolResponse:
 
 @registry.register("browser-interact", dedupe=False, invalidates_cache=True)
 def browser_upload_file(runtime: PentestRuntime, selector: str, file_paths_json: str) -> ToolResponse:
-    """Upload files to a file input element. Pass a JSON array of file paths. Example: '["/path/to/shell.php"]'."""
+    """Upload files to a file input element. Pass a JSON array of file paths. Example: '["/path/to/shell.php"]'.
+
+    File paths must be within the sandbox workspace directory for security.
+    """
     try:
         file_paths = _parse_json_object(file_paths_json)
         if not isinstance(file_paths, list):
             file_paths = [file_paths]
+
+        # Validate all paths are within sandbox workspace
+        workspace = runtime.sandbox.workspace_dir.resolve()
+        for fp in file_paths:
+            target = Path(str(fp)).resolve()
+            if not str(target).startswith(str(workspace)):
+                return _error_response(ValueError(f"File path must be within sandbox workspace: {workspace}"))
+
         return _tool_response(runtime.browser.upload_file(selector, file_paths))
     except Exception as exc:
         return _error_response(exc)

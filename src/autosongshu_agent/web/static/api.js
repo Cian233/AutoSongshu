@@ -474,9 +474,20 @@ export async function loadSession(sessionId, { render = true, suppressRecovery =
 }
 
 export async function interruptSession(sessionId) {
+  const session = state.sessionDetails.get(String(sessionId));
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  const pendingAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && message.status === "in_progress");
   const detail = normalizeSessionDetail(
     await fetchJson(`/api/chat/sessions/${encodeURIComponent(sessionId)}/interrupt`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        assistant_message_id: pendingAssistantMessage
+          ? String(pendingAssistantMessage.id || "")
+          : null,
+      }),
     }),
   );
   // Only update the summary-level data; do NOT overwrite state.sessionDetails

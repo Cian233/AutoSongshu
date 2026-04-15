@@ -118,3 +118,27 @@ class ProjectStore:
             record.updated_at = now_iso()
             self._save()
             return record
+
+    def increment_session_count(self, project_id: str) -> ProjectRecord | None:
+        """Increment the session count for a project."""
+        with self._lock:
+            record = self._projects.get(project_id)
+            if record is None:
+                return None
+            record.session_count += 1
+            record.updated_at = now_iso()
+            self._save()
+            logger.info("Incremented session count for project %s: %d", project_id, record.session_count)
+            return record
+
+    def decrement_session_count(self, project_id: str) -> ProjectRecord | None:
+        """Decrement the session count for a project."""
+        with self._lock:
+            record = self._projects.get(project_id)
+            if record is None:
+                return None
+            record.session_count = max(0, record.session_count - 1)
+            record.updated_at = now_iso()
+            self._save()
+            logger.info("Decremented session count for project %s: %d", project_id, record.session_count)
+            return record

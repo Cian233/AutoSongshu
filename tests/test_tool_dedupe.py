@@ -39,6 +39,15 @@ class _StaticReplyAgent:
         return None
 
 
+class _RecordingReplyAgent(_StaticReplyAgent):
+    def __init__(self) -> None:
+        self.received_contents: list[str] = []
+
+    async def __call__(self, msg: Msg) -> Msg:
+        self.received_contents.append(str(msg.content))
+        return await super().__call__(msg)
+
+
 class _CountingTurnCache:
     def __init__(self) -> None:
         self.reset_count = 0
@@ -102,12 +111,18 @@ class ToolDedupeTests(unittest.TestCase):
             persist_runtime_logs=lambda: None,
             artifacts=SimpleNamespace(session_dir=Path("artifacts/test-session")),
         )
-        session.config = SimpleNamespace(agent=SimpleNamespace(loop_guard_enabled=False))
+        session.config = SimpleNamespace(
+            agent=SimpleNamespace(loop_guard_enabled=False, turn_timeout_sec=30),
+        )
         session.skill_report = None
         session._interrupt_lock = threading.RLock()
         session._active_loop = None
         session._interrupt_requested = False
         session.cost_tracker = SimpleNamespace(add_usage=lambda **kwargs: None)
+        session.trajectory_recorder = SimpleNamespace(
+            start_session=lambda **kwargs: None,
+            end_session=lambda **kwargs: None,
+        )
 
         first = asyncio.run(session.send_async("First task"))
         second = asyncio.run(session.send_async("Second task"))
@@ -115,6 +130,38 @@ class ToolDedupeTests(unittest.TestCase):
         self.assertEqual(first.assistant_message, "Completed.")
         self.assertEqual(second.assistant_message, "Completed.")
         self.assertEqual(cache.reset_count, 2)
+
+    def test_send_async_does_not_duplicate_memory_context_in_user_message(self) -> None:
+        session = object.__new__(PentestConversationSession)
+        session.agent = _RecordingReplyAgent()
+        session.runtime = SimpleNamespace(
+            persist_runtime_logs=lambda: None,
+            artifacts=SimpleNamespace(session_dir=Path("artifacts/test-session")),
+        )
+        session.config = SimpleNamespace(
+            agent=SimpleNamespace(loop_guard_enabled=False, turn_timeout_sec=30),
+        )
+        session.skill_report = None
+        session._interrupt_lock = threading.RLock()
+        session._active_loop = None
+        session._interrupt_requested = False
+        session._memory_context = "MEMORY_CONTEXT_SHOULD_NOT_BE_IN_USER_MESSAGE"
+        session.cost_tracker = SimpleNamespace(add_usage=lambda **kwargs: None)
+        session.trajectory_recorder = SimpleNamespace(
+            start_session=lambda **kwargs: None,
+            end_session=lambda **kwargs: None,
+        )
+
+        reply = asyncio.run(session.send_async("Continue current task"))
+
+        self.assertEqual(reply.assistant_message, "Completed.")
+        self.assertEqual(len(session.agent.received_contents), 1)
+        prepared_content = session.agent.received_contents[0]
+        self.assertIn("Continue current task", prepared_content)
+        self.assertNotIn(
+            "MEMORY_CONTEXT_SHOULD_NOT_BE_IN_USER_MESSAGE",
+            prepared_content,
+        )
 
 
 if __name__ == "__main__":

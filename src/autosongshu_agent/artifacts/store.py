@@ -45,15 +45,16 @@ class ArtifactStore:
 
         self.root_dir = Path(root_dir).resolve()
 
-        # Project-level directory (Codex-style)
+        # Project-level directory / workspace root.
         if project_dir:
             self.project_dir = Path(project_dir).resolve()
+            # When project_dir is provided, treat it as the explicit workspace root.
+            self.workspace_dir = self.project_dir
         else:
             # Fallback: use root_dir as project dir (legacy behavior)
             self.project_dir = self.root_dir
-
-        # Project-level shared workspace (all sessions share this)
-        self.workspace_dir = self.project_dir / "workspace"
+            # Legacy behavior: workspace is stored under root_dir/workspace.
+            self.workspace_dir = self.project_dir / "workspace"
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
         # Session-level artifacts (memory, trajectories, etc.)

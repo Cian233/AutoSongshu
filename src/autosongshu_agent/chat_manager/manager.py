@@ -27,11 +27,13 @@ from ..knowledge_store import (
     KnowledgeDocumentDraft,
     KnowledgeStore,
 )
+from ..project_store import ProjectStore
 from ..memory import (
     LayeredConversationMemory,
     build_memory_transcript_payload,
     completed_messages_after_anchor,
 )
+from ..memory.context_window import TokenCounter
 from ..message_blocks import (
     assistant_content_from_blocks,
     finalize_completed_assistant_content,
@@ -113,6 +115,7 @@ class ChatSessionManager:
         self.authorization_store = AuthorizationStore(project_root=self.project_root)
         self.session_store = ChatSessionStore(project_root=self.project_root)
         self.knowledge_store = KnowledgeStore(project_root=self.project_root)
+        self.project_store = ProjectStore(data_dir=self.project_root / "data")
         self.default_artifacts_root.mkdir(parents=True, exist_ok=True)
         self.executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="autosongshu-chat"
@@ -146,6 +149,20 @@ class ChatSessionManager:
         if not path.exists():
             raise FileNotFoundError(f"Config file not found: {path}")
         return str(path)
+
+    def _resolve_project_data_path(self, raw_path: str) -> Path:
+        path = Path(str(raw_path or "").strip()).expanduser()
+        if not path.is_absolute():
+            path = (self.project_root / path).resolve()
+        return path
+
+    def _resolve_project_workspace_path(self, project_id: str) -> Path:
+        project = self.project_store.get_project(project_id)
+        if project is not None:
+            return self._resolve_project_data_path(project.workspace_dir)
+        # Keep behavior stable for historical sessions whose project metadata
+        # was removed.
+        return (self.project_root / "workspace" / project_id).resolve()
 
     def _normalize_skill_dirs(self, raw_dirs: list[str]) -> list[str]:
         normalized: list[str] = []
@@ -334,6 +351,52 @@ class ChatSessionManager:
         reserved_chars = int(getattr(compaction, "reserved_chars", 4000) or 4000)
         return max(2000, trigger_chars - reserved_chars)
 
+    def _auto_compaction_token_budget(self, session: ChatSessionState) -> int:
+        conversation = session.conversation
+        config = getattr(conversation, "config", None)
+        compaction = getattr(config, "compaction", None)
+
+        compact_after_tokens = getattr(compaction, "compact_after_tokens", None)
+        if compact_after_tokens is not None:
+            with contextlib.suppress(Exception):
+                budget = int(compact_after_tokens)
+                if budget > 0:
+                    return budget
+
+        has_token_window_fields = hasattr(compaction, "context_window_tokens") or hasattr(
+            compaction, "reserved_tokens"
+        )
+        if has_token_window_fields:
+            context_window_tokens = int(
+                getattr(compaction, "context_window_tokens", 128000) or 128000
+            )
+            reserved_tokens = int(getattr(compaction, "reserved_tokens", 8000) or 8000)
+            return max(1000, context_window_tokens - reserved_tokens)
+
+        # Backward compatibility for conversations that only provide char budgets.
+        return max(1, self._auto_compaction_char_budget(session) // 4 + 1)
+
+    def _estimate_compaction_tokens(
+        self,
+        session: ChatSessionState,
+        pending_messages: list[ChatMessage],
+    ) -> int:
+        conversation = session.conversation
+        config = getattr(conversation, "config", None)
+        model_config = getattr(config, "model", None)
+        model_name = str(getattr(model_config, "model_name", "gpt-4") or "gpt-4")
+        payload = build_memory_transcript_payload(pending_messages)
+        serialized_payload = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, default=str
+        )
+        try:
+            return max(1, TokenCounter(model_name=model_name).count(serialized_payload))
+        except Exception:
+            pending_chars = sum(
+                message_payload_size(message) for message in pending_messages
+            )
+            return pending_chars // 4 + 1
+
     def _should_prune_compacted_history(self, session: ChatSessionState) -> bool:
         conversation = session.conversation
         config = getattr(conversation, "config", None)
@@ -369,6 +432,14 @@ class ChatSessionManager:
         if assistant_turns < self._compaction_min_turns(session):
             return False
 
+        use_token_counting = bool(getattr(compaction, "use_token_counting", True))
+        if use_token_counting:
+            estimated_tokens = self._estimate_compaction_tokens(
+                session, pending_messages
+            )
+            estimated_budget = self._auto_compaction_token_budget(session)
+            return estimated_tokens >= estimated_budget
+
         pending_chars = sum(
             message_payload_size(message) for message in pending_messages
         )
@@ -389,8 +460,6 @@ class ChatSessionManager:
                 message
                 for message in session.messages
                 if message.status == "completed"
-                and not message.compacted
-                and message.role != "system"
                 and message.id not in skipped
             ]
         return completed_messages_after_anchor(
@@ -592,6 +661,8 @@ class ChatSessionManager:
             return
 
         try:
+            did_prune = False
+            deleted_ids: list[str] = []
             with self.lock:
                 session = self.chat_sessions.get(job.session_id)
                 if session is None:
@@ -601,9 +672,11 @@ class ChatSessionManager:
                 session.memory = updated_memory
                 session.is_compacting = False
 
-                deleted_ids = self._apply_physical_compaction(
-                    session, job.anchor_message_id, updated_memory
-                )
+                did_prune = self._should_prune_compacted_history(session)
+                if did_prune:
+                    deleted_ids = self._apply_physical_compaction(
+                        session, job.anchor_message_id, updated_memory
+                    )
 
             # Persist outside the lock (disk I/O)
             try:
@@ -614,12 +687,12 @@ class ChatSessionManager:
             # Notify frontend about compaction results
             self._emit_session(session)
 
-            # Push the new system summary message so the frontend can display it
-            if session.messages:
+            # Push the new system summary message only when physical pruning happened.
+            if did_prune and deleted_ids and session.messages:
                 self._emit_message(session.session_id, session.messages[0])
 
             # Push compacted event so the frontend removes stale messages
-            if deleted_ids:
+            if did_prune and deleted_ids:
                 self._emit(
                     "message.compacted",
                     session_id=session.session_id,
@@ -721,6 +794,34 @@ class ChatSessionManager:
         artifact_session_name: str | None = None,
     ) -> PentestConversationSession:
         config = load_config(session.config_path)
+        artifact_project_dir: str | None = None
+        sandbox_user_id: str | None = None
+        project_id = str(session.project_id or "").strip()
+        if project_id:
+            project = self.project_store.get_project(project_id)
+            workspace_path: Path
+            artifacts_path: Path
+            if project is not None:
+                workspace_path = self._resolve_project_data_path(project.workspace_dir)
+                artifacts_path = self._resolve_project_data_path(project.artifacts_dir)
+            else:
+                # Keep isolation stable even if the project metadata was removed.
+                workspace_path = (self.project_root / "workspace" / project_id).resolve()
+                artifacts_path = (self.project_root / "artifacts" / project_id).resolve()
+            workspace_path.mkdir(parents=True, exist_ok=True)
+            artifacts_path.mkdir(parents=True, exist_ok=True)
+            config.artifacts.root_dir = str(artifacts_path)
+            artifact_project_dir = str(workspace_path)
+            sandbox_user_id = project_id
+            if config.sandbox.isolation_mode == "project":
+                # Keep sandbox workspace aligned with project workspace root.
+                # This ensures uploads in project workspace are visible to
+                # sandbox_list_files/read/write without an extra nested level.
+                config.sandbox.root_subdir = "."
+                config.sandbox.workspace_subdir = "."
+                # Use a dedicated venv folder under project workspace root.
+                config.sandbox.venv_subdir = ".autosongshu-sandbox-venv"
+
         if session.engagement_name:
             config.engagement.name = session.engagement_name
         if session.authorization:
@@ -764,6 +865,8 @@ class ChatSessionManager:
         return PentestConversationSession(
             config,
             artifact_session_name=artifact_session_name,
+            artifact_project_dir=artifact_project_dir,
+            sandbox_user_id=sandbox_user_id,
             permission_interceptor=permission_interceptor,
         )
 
@@ -773,6 +876,36 @@ class ChatSessionManager:
         *,
         skip_message_ids: set[str] | None = None,
     ) -> PentestConversationSession:
+        if session.conversation is not None:
+            project_id = str(session.project_id or "").strip()
+            if project_id:
+                sandbox = getattr(session.conversation.runtime, "sandbox", None)
+                sandbox_mode = (
+                    str(getattr(sandbox.settings, "isolation_mode", ""))
+                    if sandbox is not None
+                    else ""
+                )
+                if sandbox_mode == "project":
+                    expected_workspace = self._resolve_project_workspace_path(project_id)
+                    actual_workspace = Path(str(sandbox.workspace_dir)).resolve()
+                    same_workspace = actual_workspace == expected_workspace
+                    if os.name == "nt":
+                        same_workspace = (
+                            str(actual_workspace).lower()
+                            == str(expected_workspace).lower()
+                        )
+                    if not same_workspace:
+                        logger.info(
+                            "Recreating conversation %s to realign sandbox workspace "
+                            "(actual=%s expected=%s)",
+                            session.session_id,
+                            actual_workspace,
+                            expected_workspace,
+                        )
+                        with contextlib.suppress(Exception):
+                            session.conversation.close()
+                        session.conversation = None
+
         if session.conversation is None:
             artifact_session_name = (
                 Path(session.artifact_dir).name if session.artifact_dir else None
@@ -912,17 +1045,34 @@ class ChatSessionManager:
                         default_profile_name=getattr(config.model, "active", None),
                     )
 
-    def interrupt_session(self, session_id: str) -> dict[str, Any]:
+    def interrupt_session(
+        self,
+        session_id: str,
+        *,
+        expected_assistant_message_id: str | None = None,
+    ) -> dict[str, Any]:
         with self.lock:
             session = self.chat_sessions.get(session_id)
             if session is None:
                 raise KeyError(session_id)
 
             future_running = session.future is not None and not session.future.done()
+            assistant_msg = self._find_latest_assistant_message(session)
+            pending_assistant_id = (
+                assistant_msg.id
+                if assistant_msg is not None and assistant_msg.status == "in_progress"
+                else None
+            )
+            expected_id = str(expected_assistant_message_id or "").strip()
+
+            if expected_id and pending_assistant_id and expected_id != pending_assistant_id:
+                raise RuntimeError(
+                    "Stale interrupt request ignored because the active turn changed."
+                )
             if session.status == "interrupting":
                 return session.detail_dict()
-            if not future_running and session.status not in {"running", "interrupting"}:
-                raise RuntimeError("当前会话没有正在执行的任务。")
+            if not future_running:
+                raise RuntimeError("No running task to interrupt.")
 
             session.status = "interrupting"
             session.error = None
@@ -932,7 +1082,6 @@ class ChatSessionManager:
 
             # Flush any in-progress assistant message content so it is
             # not lost when the agent loop stops.
-            assistant_msg = self._find_latest_assistant_message(session)
             if assistant_msg is not None and assistant_msg.status == "in_progress":
                 assistant_msg.content = finalize_completed_assistant_content(
                     assistant_msg.content
@@ -980,9 +1129,16 @@ class ChatSessionManager:
 
             # Only include messages up to message_index (inclusive)
             forked_messages = messages[: message_index + 1]
+            full_fork = message_index >= total - 1
+            forked_memory = (
+                source.memory.model_copy(deep=True)
+                if full_fork
+                else LayeredConversationMemory()
+            )
 
             new_session = ChatSessionState(
                 session_id=self._next_session_id(),
+                project_id=source.project_id,
                 title=f"{source.title} (分叉)",
                 config_path=source.config_path,
                 engagement_name=source.engagement_name,
@@ -995,7 +1151,7 @@ class ChatSessionManager:
                 knowledge_base_ids=list(source.knowledge_base_ids),
                 mode=source.mode,
                 status="idle",
-                memory=source.memory.model_copy(deep=True),
+                memory=forked_memory,
                 messages=[
                     ChatMessage(
                         id=m.id,

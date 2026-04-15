@@ -31,10 +31,15 @@ def sandbox_status(runtime: PentestRuntime) -> ToolResponse:
         return _error_response(exc)
 
 @registry.register("python-sandbox")
-def sandbox_list_files(runtime: PentestRuntime, pattern: str = "**/*", limit: int = 200) -> ToolResponse:
-    """List files in the shared per-user sandbox workspace."""
+def sandbox_list_files(runtime: PentestRuntime, pattern: str = "**/*", limit: int = 200, path: str = "") -> ToolResponse:
+    """List files in the sandbox workspace or a specific directory.
+
+    By default this lists files in the current session's sandbox workspace.
+    In project mode, this workspace is isolated per project.
+    Use `path` to list a specific subdirectory (relative to the sandbox workspace).
+    """
     try:
-        return _tool_response(runtime.sandbox.list_files(pattern=pattern, limit=limit))
+        return _tool_response(runtime.sandbox.list_files(pattern=pattern, limit=limit, path=path))
     except Exception as exc:
         return _error_response(exc)
 
@@ -190,6 +195,101 @@ def sandbox_run_python(
                 env={key: str(value) for key, value in _parse_json_object(env_json).items()},
                 timeout_sec=effective_timeout,
                 max_output_chars=max_output_chars,
+            ),
+        )
+    except Exception as exc:
+        return _error_response(exc)
+
+@registry.register("python-sandbox", invalidates_cache=True, requires_approval=True)
+def sandbox_bash(
+    runtime: PentestRuntime,
+    command: str,
+    timeout_sec: int = 0,
+    max_output_chars: int = 20000,
+) -> ToolResponse:
+    """Execute a shell command in the workspace directory.
+
+    OpenCode-style bash tool:
+    - Runs in the workspace directory with sandbox environment
+    - Default timeout: 120s (configurable via timeout_sec)
+    - Max timeout: 600s (enforced by sandbox)
+    - Output auto-truncated at max_output_chars (default 20K)
+    - On Windows, uses cmd.exe; on Linux/macOS, uses bash
+
+    Examples:
+    - sandbox_bash(command="ls -la")
+    - sandbox_bash(command="find . -name '*.py' -type f")
+    - sandbox_bash(command="grep -r 'TODO' .", timeout_sec=30)
+    """
+    try:
+        return _tool_response(
+            runtime.sandbox.run_bash(
+                command=command,
+                timeout_sec=timeout_sec,
+                max_output_chars=max_output_chars,
+            ),
+        )
+    except Exception as exc:
+        return _error_response(exc)
+
+@registry.register("python-sandbox")
+def sandbox_grep(
+    runtime: PentestRuntime,
+    pattern: str,
+    path: str = ".",
+    glob_pattern: str = "",
+    case_sensitive: bool = False,
+    max_results: int = 100,
+) -> ToolResponse:
+    """Search file contents using regex patterns.
+
+    OpenCode-style grep tool:
+    - Uses Python's re module for cross-platform regex support
+    - Supports glob pattern filtering (e.g., "*.py", "**/*.js")
+    - Returns matching lines with file paths and line numbers
+    - Results limited to max_results (default 100)
+
+    Examples:
+    - sandbox_grep(pattern="TODO|FIXME")
+    - sandbox_grep(pattern="def\\s+\\w+", glob_pattern="*.py")
+    - sandbox_grep(pattern="password", path="src", case_sensitive=True)
+    """
+    try:
+        return _tool_response(
+            runtime.sandbox.grep(
+                pattern=pattern,
+                path=path,
+                glob_pattern=glob_pattern,
+                case_sensitive=case_sensitive,
+                max_results=max_results,
+            ),
+        )
+    except Exception as exc:
+        return _error_response(exc)
+
+@registry.register("python-sandbox")
+def sandbox_glob(
+    runtime: PentestRuntime,
+    pattern: str,
+    path: str = ".",
+) -> ToolResponse:
+    """Find files using glob patterns.
+
+    OpenCode-style glob tool:
+    - Supports ** for recursive matching
+    - Returns files sorted by modification time (newest first)
+    - Includes file metadata (size, type, modified_at)
+
+    Examples:
+    - sandbox_glob(pattern="**/*.py")
+    - sandbox_glob(pattern="src/**/*.ts", path=".")
+    - sandbox_glob(pattern="**/test_*.py")
+    """
+    try:
+        return _tool_response(
+            runtime.sandbox.glob_files(
+                pattern=pattern,
+                path=path,
             ),
         )
     except Exception as exc:

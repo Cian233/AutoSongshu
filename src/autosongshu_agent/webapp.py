@@ -10,7 +10,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -21,6 +21,7 @@ from .chat_manager import (
     ChatSessionManager,
     CreateKnowledgeFromSessionRequest,
     CreateChatSessionRequest,
+    InterruptSessionRequest,
     SendMessageRequest,
 )
 from .config import get_cached_config, reload_config as _reload_config, save_config as _save_config
@@ -940,7 +941,26 @@ def create_app() -> FastAPI:
     @app.post("/api/chat/sessions")
     async def create_chat_session(payload: CreateChatSessionRequest) -> dict[str, Any]:
         try:
-            return manager.create_chat_session(payload)
+            effective_project_id = str(payload.project_id or "").strip()
+            if not effective_project_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Please select a project before creating a session.",
+                )
+
+            if project_store.get_project(effective_project_id) is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Project not found: {effective_project_id}",
+                )
+            if effective_project_id != str(payload.project_id or ""):
+                payload = payload.model_copy(update={"project_id": effective_project_id})
+
+            result = manager.create_chat_session(payload)
+            project_store.increment_session_count(effective_project_id)
+            return result
+        except HTTPException:
+            raise
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except AutoSongshuError as exc:
@@ -1067,9 +1087,28 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=_safe_error_detail(exc)) from exc
 
     @app.post("/api/chat/sessions/{session_id}/interrupt")
-    async def interrupt_session(session_id: str) -> dict[str, Any]:
+    async def interrupt_session(
+        session_id: str,
+        request: Request,
+        payload: InterruptSessionRequest | None = Body(default=None),
+    ) -> dict[str, Any]:
         try:
-            return manager.interrupt_session(session_id)
+            expected_assistant_message_id = (
+                str(payload.assistant_message_id or "").strip()
+                if payload is not None
+                else ""
+            )
+            if request is not None:
+                logger.info(
+                    "Interrupt requested: session=%s expected_assistant=%s client=%s",
+                    session_id,
+                    expected_assistant_message_id or "-",
+                    getattr(request.client, "host", "unknown"),
+                )
+            return manager.interrupt_session(
+                session_id,
+                expected_assistant_message_id=expected_assistant_message_id or None,
+            )
         except KeyError as exc:
             raise HTTPException(
                 status_code=404, detail=f"Chat session not found: {session_id}"
@@ -1324,7 +1363,8 @@ def create_app() -> FastAPI:
             if project is None:
                 raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
 
-            workspace_root = Path(project.workspace_dir).resolve()
+            # Resolve workspace_dir relative to project_root, not CWD
+            workspace_root = (project_root / project.workspace_dir).resolve()
             workspace_root.mkdir(parents=True, exist_ok=True)
 
             def build_tree(directory: Path) -> list[dict[str, Any]]:
@@ -1367,7 +1407,8 @@ def create_app() -> FastAPI:
             if project is None:
                 raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
 
-            workspace_root = Path(project.workspace_dir).resolve()
+            # Resolve workspace_dir relative to project_root, not CWD
+            workspace_root = (project_root / project.workspace_dir).resolve()
             workspace_root.mkdir(parents=True, exist_ok=True)
 
             target_path = workspace_root / path if path else workspace_root / file.filename
@@ -1398,7 +1439,8 @@ def create_app() -> FastAPI:
             if project is None:
                 raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
 
-            workspace_root = Path(project.workspace_dir).resolve()
+            # Resolve workspace_dir relative to project_root, not CWD
+            workspace_root = (project_root / project.workspace_dir).resolve()
             target_path = (workspace_root / path).resolve()
 
             if not target_path.is_relative_to(workspace_root):

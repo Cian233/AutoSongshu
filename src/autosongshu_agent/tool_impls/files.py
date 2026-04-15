@@ -42,9 +42,17 @@ def glob_search(
     Args:
         pattern: Glob pattern (e.g. "**/*.py", "*.json", "src/**/*.js").
         path: Root directory to search in. Defaults to sandbox workspace.
+              Must be within the sandbox workspace directory.
     """
     try:
-        search_root = Path(path) if path else runtime.sandbox.workspace_dir
+        workspace = runtime.sandbox.workspace_dir.resolve()
+        if path:
+            search_root = Path(path).resolve()
+            if not str(search_root).startswith(str(workspace)):
+                return _tool_response({"ok": False, "error": f"路径必须在 sandbox workspace 范围内: {workspace}"})
+        else:
+            search_root = workspace
+
         if not search_root.exists():
             return _tool_response({"ok": False, "error": f"路径不存在: {search_root}"})
 
@@ -108,7 +116,14 @@ def grep_search(
         max_results: Maximum number of results to return.
     """
     try:
-        search_root = Path(path) if path else runtime.sandbox.workspace_dir
+        workspace = runtime.sandbox.workspace_dir.resolve()
+        if path:
+            search_root = Path(path).resolve()
+            if not str(search_root).startswith(str(workspace)):
+                return _tool_response({"ok": False, "error": f"路径必须在 sandbox workspace 范围内: {workspace}"})
+        else:
+            search_root = workspace
+
         if not search_root.exists():
             return _tool_response({"ok": False, "error": f"路径不存在: {search_root}"})
 

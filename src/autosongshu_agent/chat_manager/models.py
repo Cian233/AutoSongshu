@@ -391,5 +391,9 @@ class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
+class InterruptSessionRequest(BaseModel):
+    assistant_message_id: str | None = None
+
+
 class CreateKnowledgeFromSessionRequest(BaseModel):
     knowledge_base_id: str | None = None

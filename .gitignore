@@ -26,6 +26,8 @@ README.local.md
 *.private.md
 promo/
 docs/
+workspace/
+data/
 
 .trae/
 

@@ -64,6 +64,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const setSubmitting = useSessionStore((state) => state.setSubmitting);
   const selectedSessionId = useSessionStore((state) => state.selectedSessionId);
   const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
+  const canSend = Boolean(selectedSessionId || selectedProjectId);
   const selectedKnowledgeBaseIds = useKnowledgeStore(
     (state) => state.selectedKnowledgeBaseIds,
   );
@@ -93,6 +94,11 @@ export const Composer: React.FC<ComposerProps> = ({
 
       const content = text.trim();
       if (!content) {
+        textareaRef.current?.focus();
+        return;
+      }
+      if (!selectedSessionId && !selectedProjectId) {
+        window.alert("Please select a project first.");
         textareaRef.current?.focus();
         return;
       }
@@ -127,7 +133,7 @@ export const Composer: React.FC<ComposerProps> = ({
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 config_path: defaultConfigPath,
-                project_id: selectedProjectId || "",
+                project_id: selectedProjectId,
                 message: content,
                 engagement_name: authorizationDraft.name || null,
                 authorization: authorizationDraft.authorization || null,
@@ -348,7 +354,7 @@ export const Composer: React.FC<ComposerProps> = ({
             id="submit-button"
             type="submit"
             aria-label={isSubmitting ? "发送中..." : "发送消息"}
-            disabled={isSubmitting || !text.trim()}
+            disabled={isSubmitting || !text.trim() || !canSend}
           >
             {isSubmitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />

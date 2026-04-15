@@ -242,11 +242,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   on("refresh-button", "click", () => {
     refreshData().catch((error) => window.alert(String(error.message || error)));
   });
+  let interruptRequestInFlight = false;
   on("pause-button", "click", () => {
+    if (interruptRequestInFlight) {
+      return;
+    }
     if (!state.selectedSessionId) {
       return;
     }
-    interruptSession(state.selectedSessionId).catch((error) => window.alert(String(error.message || error)));
+    interruptRequestInFlight = true;
+    interruptSession(state.selectedSessionId)
+      .catch((error) => window.alert(String(error.message || error)))
+      .finally(() => {
+        interruptRequestInFlight = false;
+      });
   });
   on("distill-knowledge-button", "click", async () => {
     if (state.isDistillingKnowledge) {

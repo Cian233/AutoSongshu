@@ -81,6 +81,7 @@ class PentestRuntime:
         self,
         config: AppConfig,
         artifact_session_name: str | None = None,
+        artifact_project_dir: str | None = None,
         sandbox_user_id: str | None = None,
     ) -> None:
         self.config = config
@@ -93,6 +94,7 @@ class PentestRuntime:
             root_dir=config.artifacts.root_dir,
             engagement_name=config.engagement.name,
             session_name=artifact_session_name,
+            project_dir=artifact_project_dir,
         )
         self.findings = FindingStore(self.artifacts)
         self.http = ScopedHttpClient(

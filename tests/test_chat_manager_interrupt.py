@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from agentscope.message import Msg
 
 from autosongshu_agent.agent import ConversationReply, PentestConversationSession
+from autosongshu_agent.agent.utils import _StreamLoopGuard
 from autosongshu_agent.chat_manager import (
     ChatSessionManager,
     ChatSessionState,
@@ -181,7 +182,14 @@ class PentestConversationInterruptTests(unittest.IsolatedAsyncioTestCase):
         session._interrupt_lock = threading.RLock()
         session._active_loop = None
         session._interrupt_requested = False
+        session.config = SimpleNamespace(
+            agent=SimpleNamespace(loop_guard_enabled=False, turn_timeout_sec=30),
+        )
         session.cost_tracker = SimpleNamespace(add_usage=lambda **kwargs: None)
+        session.trajectory_recorder = SimpleNamespace(
+            start_session=lambda **kwargs: None,
+            end_session=lambda **kwargs: None,
+        )
 
         self.assertFalse(session.interrupt())
 
@@ -192,6 +200,74 @@ class PentestConversationInterruptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session._active_loop)
         self.assertFalse(session._interrupt_requested)
 
+    async def test_stream_loop_guard_does_not_hard_interrupt_running_agent(self) -> None:
+        session = object.__new__(PentestConversationSession)
+        session.agent = _InterruptibleDummyAgent()
+
+        queue: asyncio.Queue[tuple[Msg, bool, object | None]] = asyncio.Queue()
+        stop_event = asyncio.Event()
+        guard = _StreamLoopGuard()
+
+        first_blocks = [
+            {
+                "type": "tool_use",
+                "id": "tool:1",
+                "name": "browser_navigate",
+                "input": {"url": "https://example.test"},
+            },
+            {
+                "type": "tool_result",
+                "tool_call_id": "tool:1",
+                "name": "browser_navigate",
+                "content": [{"type": "output_text", "text": "HTTP 200"}],
+            },
+        ]
+        second_blocks = first_blocks + [
+            {
+                "type": "tool_use",
+                "id": "tool:2",
+                "name": "browser_navigate",
+                "input": {"url": "https://example.test"},
+            },
+            {
+                "type": "tool_result",
+                "tool_call_id": "tool:2",
+                "name": "browser_navigate",
+                "content": [{"type": "output_text", "text": "HTTP 200"}],
+            },
+        ]
+        stalled_blocks = second_blocks + [
+            {"type": "text", "text": "Trying another approach."},
+        ]
+
+        await queue.put(
+            (
+                Msg(name="AutoSongshu", role="assistant", content=first_blocks),
+                False,
+                None,
+            )
+        )
+        await queue.put(
+            (
+                Msg(name="AutoSongshu", role="assistant", content=second_blocks),
+                False,
+                None,
+            )
+        )
+        await queue.put(
+            (
+                Msg(name="AutoSongshu", role="assistant", content=stalled_blocks),
+                False,
+                None,
+            )
+        )
+        stop_event.set()
+
+        await session.stream_agent_messages(queue, stop_event, loop_guard=guard)
+
+        self.assertEqual(session.agent.interrupt_calls, 0)
+        self.assertIsNotNone(guard.consume_triggered_reason())
+
 
 class ChatSessionManagerInterruptTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -200,9 +276,15 @@ class ChatSessionManagerInterruptTests(unittest.TestCase):
         self.manager = ChatSessionManager(project_root=Path(self.temp_dir.name))
         self.addCleanup(self.manager.shutdown)
 
+    def _new_session(self, **kwargs) -> ChatSessionState:
+        payload = dict(kwargs)
+        if "project_id" in getattr(ChatSessionState, "__dataclass_fields__", {}):
+            payload.setdefault("project_id", "project-test")
+        return ChatSessionState(**payload)
+
     def test_interrupt_session_marks_running_session_interrupting(self) -> None:
         conversation = _ConversationRecorder()
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0001",
             title="Interrupt test",
             config_path="E:/config.yaml",
@@ -220,7 +302,7 @@ class ChatSessionManagerInterruptTests(unittest.TestCase):
         self.assertEqual(conversation.interrupt_calls, 1)
 
     def test_interrupt_session_rejects_idle_session(self) -> None:
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0002",
             title="Idle test",
             config_path="E:/config.yaml",
@@ -256,7 +338,7 @@ class ChatSessionManagerInterruptTests(unittest.TestCase):
         )
 
     def test_stream_partial_updates_emit_running_session_summary(self) -> None:
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0003",
             title="Streaming test",
             config_path="E:/config.yaml",
@@ -298,7 +380,7 @@ class ChatSessionManagerInterruptTests(unittest.TestCase):
         )
 
     def test_second_turn_can_queue_while_post_turn_cleanup_finishes(self) -> None:
-        session = ChatSessionState(
+        session = self._new_session(
             session_id="chat-0004",
             title="Cleanup lock test",
             config_path="E:/config.yaml",

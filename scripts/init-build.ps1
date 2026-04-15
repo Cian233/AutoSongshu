@@ -57,16 +57,43 @@ function Invoke-External {
     }
 }
 
+function Get-ProjectPythonExecutable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectRoot,
+        [switch]$AllowMissing
+    )
+
+    $relativePath = if ($env:OS -eq "Windows_NT") {
+        ".venv\Scripts\python.exe"
+    }
+    else {
+        ".venv/bin/python"
+    }
+
+    $pythonPath = Join-Path $ProjectRoot $relativePath
+    if (-not (Test-Path -LiteralPath $pythonPath)) {
+        if ($AllowMissing) {
+            return $pythonPath
+        }
+        throw "Project virtual environment Python not found: $pythonPath. Run uv sync first."
+    }
+
+    return (Resolve-Path -LiteralPath $pythonPath).Path
+}
+
 function Test-PythonRuntimeHealth {
     param(
         [Parameter(Mandatory = $true)]
         [string]$ProjectRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$PythonExecutable,
         [ref]$FailureOutput
     )
 
     Write-Step "Running Python runtime binary self-check..."
     if ($DryRun) {
-        Write-Host "Command: uv run python <python-runtime-health-check-script>" -ForegroundColor DarkGray
+        Write-Host "Command: $PythonExecutable <python-runtime-health-check-script>" -ForegroundColor DarkGray
         return $true
     }
 
@@ -92,8 +119,8 @@ print("runtime-ok")
     $combinedOutput = ""
     Push-Location -LiteralPath $ProjectRoot
     try {
-        $process = Start-Process -FilePath "uv" `
-            -ArgumentList @("run", "python", $healthScriptPath) `
+        $process = Start-Process -FilePath $PythonExecutable `
+            -ArgumentList @($healthScriptPath) `
             -NoNewWindow `
             -Wait `
             -PassThru `
@@ -317,6 +344,8 @@ function Invoke-StatusScript {
         [Parameter(Mandatory = $true)]
         [string]$ProjectRoot,
         [Parameter(Mandatory = $true)]
+        [string]$PythonExecutable,
+        [Parameter(Mandatory = $true)]
         [string]$Name,
         [Parameter(Mandatory = $true)]
         [string]$RelativeScriptPath
@@ -329,11 +358,11 @@ function Invoke-StatusScript {
 
     Write-Step "Running $Name status check..."
     if ($DryRun) {
-        Write-Host "Command: uv run python $scriptPath" -ForegroundColor DarkGray
+        Write-Host "Command: $PythonExecutable $scriptPath" -ForegroundColor DarkGray
         return $null
     }
 
-    $rawOutput = & uv run python $scriptPath
+    $rawOutput = & $PythonExecutable $scriptPath
     if ($LASTEXITCODE -ne 0) {
         throw "$Name status script failed with exit code $LASTEXITCODE"
     }
@@ -381,9 +410,12 @@ else {
     Write-Step "Skipping uv sync."
 }
 
+$ProjectPython = Get-ProjectPythonExecutable -ProjectRoot $ProjectRoot -AllowMissing:$DryRun
+Write-Step "Using project Python runtime: $ProjectPython"
+
 if (-not $SkipPythonRuntimeCheck) {
     $runtimeFailure = ""
-    if (Test-PythonRuntimeHealth -ProjectRoot $ProjectRoot -FailureOutput ([ref]$runtimeFailure)) {
+    if (Test-PythonRuntimeHealth -ProjectRoot $ProjectRoot -PythonExecutable $ProjectPython -FailureOutput ([ref]$runtimeFailure)) {
         Write-Step "Python runtime binary self-check passed."
     }
     else {
@@ -398,7 +430,7 @@ if (-not $SkipPythonRuntimeCheck) {
         }
 
         $runtimeFailureAfterRepair = ""
-        if (-not (Test-PythonRuntimeHealth -ProjectRoot $ProjectRoot -FailureOutput ([ref]$runtimeFailureAfterRepair))) {
+        if (-not (Test-PythonRuntimeHealth -ProjectRoot $ProjectRoot -PythonExecutable $ProjectPython -FailureOutput ([ref]$runtimeFailureAfterRepair))) {
             if ($runtimeFailureAfterRepair) {
                 throw "Python runtime self-check still failing after repair.`n$runtimeFailureAfterRepair"
             }
@@ -481,12 +513,12 @@ else {
 }
 
 if (-not $SkipStatusChecks) {
-    $sqlmapStatus = Invoke-StatusScript -ProjectRoot $ProjectRoot -Name "sqlmap-sqli" -RelativeScriptPath "skills\sqlmap-sqli\scripts\sqlmap_status.py"
+    $sqlmapStatus = Invoke-StatusScript -ProjectRoot $ProjectRoot -PythonExecutable $ProjectPython -Name "sqlmap-sqli" -RelativeScriptPath "skills\sqlmap-sqli\scripts\sqlmap_status.py"
     if ($sqlmapStatus -and -not $sqlmapStatus.available) {
         throw "sqlmap-sqli status check failed: bundled source is not available."
     }
 
-    $dirsearchStatus = Invoke-StatusScript -ProjectRoot $ProjectRoot -Name "dirsearch-recon" -RelativeScriptPath "skills\dirsearch-recon\scripts\dirsearch_status.py"
+    $dirsearchStatus = Invoke-StatusScript -ProjectRoot $ProjectRoot -PythonExecutable $ProjectPython -Name "dirsearch-recon" -RelativeScriptPath "skills\dirsearch-recon\scripts\dirsearch_status.py"
     if ($dirsearchStatus) {
         if (-not $dirsearchStatus.available) {
             throw "dirsearch-recon status check failed: bundled source is not available."
@@ -497,7 +529,7 @@ if (-not $SkipStatusChecks) {
         }
     }
 
-    $nmapStatus = Invoke-StatusScript -ProjectRoot $ProjectRoot -Name "nmap-recon" -RelativeScriptPath "skills\nmap-recon\scripts\nmap_status.py"
+    $nmapStatus = Invoke-StatusScript -ProjectRoot $ProjectRoot -PythonExecutable $ProjectPython -Name "nmap-recon" -RelativeScriptPath "skills\nmap-recon\scripts\nmap_status.py"
     if ($nmapStatus -and -not $nmapStatus.available) {
         Write-Warning "nmap-recon status: nmap binary is missing. sqlmap/dirsearch examples are still available."
     }
@@ -510,27 +542,37 @@ else {
 }
 
 Write-Step "Initializing sandbox environment..."
-$sandboxInitScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("autosongshu-sandbox-init-{0}.py" -f ([guid]::NewGuid().ToString("N")))
+$sandboxInitDir = Join-Path $ProjectRoot ".tmp"
+New-Item -ItemType Directory -Path $sandboxInitDir -Force | Out-Null
+$sandboxInitScriptPath = Join-Path $sandboxInitDir "autosongshu-sandbox-init.py"
 $sandboxInitScriptContent = @'
 from autosongshu_agent.config import load_config, ScopePolicy
 from autosongshu_agent.sandbox import PythonSandbox
 from autosongshu_agent.artifacts import ArtifactStore
-import tempfile
 import sys
 import logging
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 try:
     print("Loading config...")
     config = load_config("configs/pentest.example.yaml")
-    root = tempfile.mkdtemp()
-    artifacts = ArtifactStore(str(root), "init")
+    artifact_root = Path(config.artifacts.root_dir).resolve()
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    artifacts = ArtifactStore(
+        str(artifact_root),
+        "init-build",
+        session_name="bootstrap",
+    )
     
     print(f"Creating sandbox instance...")
     sandbox = PythonSandbox(config.sandbox, ScopePolicy("http://localhost", []), artifacts, "init", "auth")
     
-    print("Bootstrapping sandbox environment (this may take a minute or two to install packages)...")
+    if sandbox.python_executable.exists():
+        print(f"Reusing sandbox virtual environment at {sandbox.venv_dir}...")
+    else:
+        print("Bootstrapping sandbox environment (this may take a minute or two to install packages)...")
     sandbox._ensure_bootstrapped()
     
     print("Sandbox bootstrapped successfully.")
@@ -539,7 +581,14 @@ except Exception as e:
     sys.exit(1)
 '@
 Set-Content -LiteralPath $sandboxInitScriptPath -Value $sandboxInitScriptContent -Encoding UTF8
-Invoke-External -FilePath "uv" -Arguments @("run", "python", "-u", $sandboxInitScriptPath)
+try {
+    Invoke-External -FilePath $ProjectPython -Arguments @("-u", $sandboxInitScriptPath)
+}
+finally {
+    if (Test-Path -LiteralPath $sandboxInitScriptPath) {
+        Remove-Item -LiteralPath $sandboxInitScriptPath -Force -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Step "Build and initialization complete!"
 Write-Host "Next step:" -ForegroundColor Cyan

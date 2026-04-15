@@ -1,7 +1,7 @@
 // ── ChatPage ───────────────────────────────────────────────────
 // Main chat page composing AppShell with all sub-components.
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Sidebar } from "../components/layout/Sidebar";
 import { SessionList } from "../components/session/SessionList";
@@ -24,6 +24,7 @@ import { useTheme } from "../hooks/use-theme";
 import { useSSE } from "../hooks/use-sse";
 import { useKeyboardShortcuts } from "../hooks/use-keyboard-shortcuts";
 import { fetchJson } from "../lib/api";
+import { normalizeSessionDetail } from "../lib/message-normalizer";
 import {
   sessionInterruptUrl,
   sessionForkUrl,
@@ -50,6 +51,7 @@ export default function ChatPage() {
   const currentSession = selectedSessionId
     ? sessionDetails.get(selectedSessionId)
     : undefined;
+  const interruptInFlightRef = useRef(false);
 
   const messages = currentSession?.messages ?? [];
 
@@ -69,7 +71,8 @@ export default function ChatPage() {
     if (!selectedSessionId) return;
 
     const current = sessions.find((s) => String(s.id) === String(selectedSessionId));
-    if (current && String(current.project_id || "") !== String(selectedProjectId)) {
+    const currentProjectId = String(current?.project_id || "");
+    if (current && currentProjectId !== String(selectedProjectId)) {
       selectSession(null);
     }
   }, [selectedProjectId, selectedSessionId, sessions, selectSession]);
@@ -82,14 +85,34 @@ export default function ChatPage() {
 
   const handlePause = useCallback(async () => {
     if (!selectedSessionId) return;
+    if (interruptInFlightRef.current) return;
     try {
-      await fetchJson(sessionInterruptUrl(selectedSessionId), {
+      interruptInFlightRef.current = true;
+      const pendingAssistantMessage = [...(currentSession?.messages || [])]
+        .reverse()
+        .find(
+          (message) =>
+            message.role === "assistant" && message.status === "in_progress",
+        );
+      const detail = await fetchJson<Record<string, unknown>>(sessionInterruptUrl(selectedSessionId), {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assistant_message_id: pendingAssistantMessage
+            ? String(pendingAssistantMessage.id || "")
+            : null,
+        }),
       });
+      // Immediately update local state with the response
+      const normalizedDetail = normalizeSessionDetail(detail);
+      useSessionStore.getState().setSessionDetail(selectedSessionId, normalizedDetail);
+      useSessionStore.getState().upsertSessionSummary(normalizedDetail);
     } catch (err) {
       console.error("Failed to interrupt session:", err);
+    } finally {
+      interruptInFlightRef.current = false;
     }
-  }, [selectedSessionId]);
+  }, [selectedSessionId, currentSession]);
 
   const handleDistill = useCallback(() => {
     // Distill (knowledge extraction) is not yet available as a backend API.
@@ -180,7 +203,7 @@ export default function ChatPage() {
       }
     >
       {/* Chat Thread Area */}
-      <div className="flex-1 min-h-0 flex flex-col relative">
+      <div className="flex-1 min-h-0 flex flex-col relative overflow-y-auto">
         {selectedSessionId ? (
           <div className="max-w-[var(--content-width)] mx-auto px-6 py-4 flex-1 min-h-0 flex flex-col">
             <ChatThread

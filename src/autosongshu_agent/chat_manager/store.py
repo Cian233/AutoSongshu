@@ -78,6 +78,7 @@ class ChatConversationRow(Base):
     __tablename__ = "chat_conversations"
 
     session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), default="")
     title: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32))
     config_path: Mapped[str] = mapped_column(Text)
@@ -151,6 +152,13 @@ class ChatSessionStore:
                             "ALTER TABLE chat_conversations ADD COLUMN mode VARCHAR(32) DEFAULT 'auto'"
                         )
                     )
+            if "project_id" not in columns:
+                with self.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE chat_conversations ADD COLUMN project_id VARCHAR(64) DEFAULT ''"
+                        )
+                    )
 
     def _resolve_database_url(self) -> str:
         raw_url = (
@@ -183,6 +191,7 @@ class ChatSessionStore:
     ) -> dict[str, Any]:
         return {
             "id": row.session_id,
+            "project_id": row.project_id or "",
             "title": row.title,
             "status": row.status,
             "config_path": row.config_path,
@@ -267,6 +276,7 @@ class ChatSessionStore:
             if row is None:
                 row = ChatConversationRow(
                     session_id=session_id,
+                    project_id=str(payload.get("project_id") or ""),
                     title=str(payload.get("title") or session_id),
                     status=str(payload.get("status") or "idle"),
                     config_path=str(payload.get("config_path") or ""),
@@ -280,6 +290,8 @@ class ChatSessionStore:
             row.title = str(payload.get("title") or row.title)
             row.status = str(payload.get("status") or row.status)
             row.config_path = str(payload.get("config_path") or row.config_path)
+            if payload.get("project_id") is not None:
+                row.project_id = str(payload.get("project_id") or "")
             row.engagement_name = payload.get("engagement_name")
             row.authorization = payload.get("authorization")
             row.start_url = payload.get("start_url")
@@ -428,6 +440,7 @@ class ChatSessionStore:
 
         return {
             "id": session_id,
+            "project_id": str(payload.get("project_id") or ""),
             "title": str(payload.get("title") or session_id),
             "status": str(payload.get("status") or "idle"),
             "config_path": str(payload.get("config_path") or ""),
@@ -455,6 +468,7 @@ class ChatSessionStore:
         if row is None:
             row = ChatConversationRow(
                 session_id=payload["id"],
+                project_id=str(payload.get("project_id") or ""),
                 title=str(payload.get("title") or payload["id"]),
                 status=str(payload.get("status") or "idle"),
                 config_path=str(payload.get("config_path") or ""),
@@ -468,6 +482,8 @@ class ChatSessionStore:
         row.title = str(payload.get("title") or row.title)
         row.status = str(payload.get("status") or row.status)
         row.config_path = str(payload.get("config_path") or row.config_path)
+        if payload.get("project_id") is not None:
+            row.project_id = str(payload.get("project_id") or "")
         row.engagement_name = payload.get("engagement_name")
         row.authorization = payload.get("authorization")
         row.start_url = payload.get("start_url")

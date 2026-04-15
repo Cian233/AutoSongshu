@@ -78,7 +78,8 @@ def todo_write(
             })
 
         # Load existing todos
-        todo_file = runtime.artifacts.path("todos.json")
+        # Use project-level workspace for cross-session todo sharing
+        todo_file = runtime.sandbox.workspace_dir / "todos.json"
         old_todos: list[dict[str, Any]] = []
         if merge and todo_file.exists():
             try:

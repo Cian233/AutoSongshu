@@ -10,6 +10,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useConnectionStore } from "../stores/use-connection-store";
 import { useSessionStore } from "../stores/use-session-store";
+import { useProjectStore } from "../stores/use-project-store";
 import { API_ENDPOINTS } from "../lib/api-endpoints";
 import { getApiToken } from "../lib/auth";
 import { fetchJson } from "../lib/api";
@@ -123,24 +124,30 @@ export function useSSE() {
         );
 
         const state = useSessionStore.getState();
+        const selectedProjectId = useProjectStore.getState().selectedProjectId;
+        const scopedSessions = selectedProjectId
+          ? state.sessions.filter(
+              (item) => String(item.project_id || "") === String(selectedProjectId),
+            )
+          : [];
         if (state.selectedSessionId) {
           const selectedId = String(state.selectedSessionId);
-          const exists = state.sessions.some(
+          const exists = scopedSessions.some(
             (item) => String(item.id) === selectedId,
           );
           if (exists) {
             await loadSessionDetail(selectedId, { suppressRecovery });
           } else {
-            const firstId = state.sessions[0]?.id
-              ? String(state.sessions[0].id)
+            const firstId = scopedSessions[0]?.id
+              ? String(scopedSessions[0].id)
               : null;
             useSessionStore.getState().selectSession(firstId);
             if (firstId) {
               await loadSessionDetail(firstId, { suppressRecovery });
             }
           }
-        } else if (state.sessions.length) {
-          const firstId = String(state.sessions[0].id);
+        } else if (scopedSessions.length) {
+          const firstId = String(scopedSessions[0].id);
           useSessionStore.getState().selectSession(firstId);
           await loadSessionDetail(firstId, { suppressRecovery });
         }

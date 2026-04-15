@@ -18,10 +18,10 @@ class PentestPhase(str, Enum):
 
 
 PHASE_TOOL_GROUPS: dict[str, list[str]] = {
-    PentestPhase.RECON: ["http", "browser", "knowledge"],
-    PentestPhase.SCANNING: ["sandbox", "skill-scripts", "findings"],
-    PentestPhase.EXPLOITATION: ["sandbox", "skill-scripts", "findings", "http"],
-    PentestPhase.REPORTING: ["findings", "knowledge"],
+    PentestPhase.RECON: ["http", "browser", "knowledge", "agent"],
+    PentestPhase.SCANNING: ["sandbox", "skill-scripts", "findings", "agent"],
+    PentestPhase.EXPLOITATION: ["sandbox", "skill-scripts", "findings", "http", "agent"],
+    PentestPhase.REPORTING: ["findings", "knowledge", "agent"],
 }
 
 
@@ -129,6 +129,14 @@ DEFAULT_TOOL_GROUPS: tuple[ToolGroupConfig, ...] = (
         tools=("knowledge_search",),
         enabled_by_default=True,
         risk_level="low",
+    ),
+    ToolGroupConfig(
+        name="agent",
+        description="Sub-agent spawning tools for parallel task execution",
+        tools=("spawn_agent",),
+        enabled_by_default=True,
+        requires_approval=True,
+        risk_level="high",
     ),
 )
 

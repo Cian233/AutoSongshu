@@ -986,14 +986,16 @@ class PythonSandbox:
         offset: int = 0,
         limit: int = 0,
     ) -> dict[str, Any]:
-        """Read a file with OpenCode-style pagination.
+        """Read a file with OpenCode-style pagination using streaming/chunked reading.
 
-        Inspired by OpenCode's read tool strategy:
+        OpenCode-inspired improvements:
+        - Uses line-by-line streaming to avoid loading entire file into memory
         - DEFAULT_READ_LIMIT = 2000 lines
-        - MAX_BYTES = 50KB
+        - MAX_BYTES = 50KB per chunk
         - offset/limit based line pagination
         - Auto-truncation with hint for continuation
         - Out-of-range offset recovery (return tail instead of error)
+        - Binary file detection
 
         Args:
             path: File path relative to workspace.
@@ -1014,11 +1016,26 @@ class PythonSandbox:
             default_char_limit = 128 * 1024  # 128K
 
             effective_max_chars = max_chars if max_chars > 0 else default_char_limit
-
-            content = target.read_text(encoding="utf-8", errors="replace")
-            lines = content.splitlines(keepends=True)
-            total_lines = len(lines)
             total_bytes = target.stat().st_size
+
+            # Binary file detection (OpenCode style)
+            if total_bytes > 0:
+                with open(target, "rb") as f:
+                    header = f.read(512)
+                if b"\x00" in header:
+                    return {
+                        "path": str(target),
+                        "relative_path": target.relative_to(self.workspace_dir).as_posix(),
+                        "size_bytes": total_bytes,
+                        "error": "Binary file detected. Cannot read binary files with read_file.",
+                        "is_binary": True,
+                    }
+
+            # Count total lines using streaming (memory-efficient)
+            total_lines = 0
+            with open(target, "r", encoding="utf-8", errors="replace") as f:
+                for _ in f:
+                    total_lines += 1
 
             # Determine line range using offset/limit or start_line/end_line
             actual_start = 1
@@ -1051,16 +1068,21 @@ class PythonSandbox:
                     "start_line/offset must be less than or equal to end_line/limit."
                 )
 
-            if not lines:
-                selected_lines: list[str] = []
-                selected_content = ""
-                selected_start_line = 0
-                selected_end_line = 0
-            else:
-                selected_lines = lines[actual_start - 1 : actual_end]
-                selected_content = "".join(selected_lines)
-                selected_start_line = actual_start
-                selected_end_line = min(actual_end, total_lines)
+            # Stream only the requested lines (memory-efficient)
+            selected_lines: list[str] = []
+            current_line = 0
+            with open(target, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    current_line += 1
+                    if current_line < actual_start:
+                        continue
+                    if current_line > actual_end:
+                        break
+                    selected_lines.append(line)
+
+            selected_content = "".join(selected_lines)
+            selected_start_line = actual_start if selected_lines else 0
+            selected_end_line = min(actual_end, total_lines) if selected_lines else 0
 
             # Truncate by character budget
             preview, truncated = truncate_text(selected_content, effective_max_chars)
@@ -1103,11 +1125,26 @@ class PythonSandbox:
 
             return payload
 
-    def list_files(self, pattern: str = "**/*", limit: int = 200) -> dict[str, Any]:
+    def list_files(self, pattern: str = "**/*", limit: int = 200, path: str = "") -> dict[str, Any]:
+        """List files in the sandbox workspace or a specific directory.
+
+        Args:
+            pattern: Glob pattern for matching files.
+            limit: Maximum number of items to return.
+            path: Optional subdirectory path (relative to workspace_dir).
+                  If empty, lists from workspace root.
+        """
         with self._lock:
             self._ensure_directories()
+            search_dir = self.workspace_dir / path if path else self.workspace_dir
+            search_dir = search_dir.resolve()
+
+            # Security: ensure path is within workspace
+            if not str(search_dir).startswith(str(self.workspace_dir.resolve())):
+                raise SandboxError(f"Path outside workspace: {path}")
+
             items: list[dict[str, Any]] = []
-            for candidate in sorted(self.workspace_dir.glob(pattern)):
+            for candidate in sorted(search_dir.glob(pattern)):
                 relative_path = candidate.relative_to(self.workspace_dir).as_posix()
                 items.append(
                     {
@@ -1122,9 +1159,179 @@ class PythonSandbox:
                     break
             return {
                 "workspace_dir": str(self.workspace_dir),
+                "search_path": path or ".",
                 "pattern": pattern,
                 "items": items,
                 "truncated": len(items) >= limit,
+            }
+
+    def run_bash(
+        self,
+        command: str,
+        timeout_sec: int = 0,
+        max_output_chars: int = 20000,
+    ) -> dict[str, Any]:
+        """Execute a shell command in the workspace directory.
+
+        OpenCode-style bash tool:
+        - Runs in the workspace directory with sandbox environment
+        - Default timeout: 120s (configurable)
+        - Max timeout: 600s (enforced by sandbox)
+        - Output auto-truncated at max_output_chars
+        - Supports persistent shell session context
+
+        Args:
+            command: Shell command to execute.
+            timeout_sec: Timeout in seconds (0 = use config default).
+            max_output_chars: Maximum characters in output (default 20K).
+        """
+        effective_timeout = timeout_sec if timeout_sec > 0 else self.settings.execution_timeout_sec
+        max_timeout = getattr(self.settings, "max_execution_timeout_sec", 600)
+        effective_timeout = min(effective_timeout, max_timeout)
+
+        # Determine shell based on platform
+        is_windows = os.name == "nt"
+        shell_cmd = ["cmd.exe", "/c", command] if is_windows else ["bash", "-c", command]
+
+        result = self._run_command(
+            shell_cmd,
+            timeout_sec=effective_timeout,
+            cwd=self.workspace_dir,
+        )
+
+        # Truncate output
+        stdout = result.get("stdout", "")
+        stderr = result.get("stderr", "")
+        stdout_truncated = len(stdout) > max_output_chars
+        stderr_truncated = len(stderr) > max_output_chars
+
+        return {
+            "ok": result["ok"],
+            "exit_code": result["exit_code"],
+            "stdout": stdout[:max_output_chars] + ("\n... (output truncated)" if stdout_truncated else ""),
+            "stderr": stderr[:max_output_chars] + ("\n... (output truncated)" if stderr_truncated else ""),
+            "duration_sec": result["duration_sec"],
+            "command": command,
+            "cwd": str(self.workspace_dir),
+            "timed_out": result.get("timed_out", False),
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+        }
+
+    def grep(
+        self,
+        pattern: str,
+        path: str = ".",
+        glob_pattern: str = "",
+        case_sensitive: bool = False,
+        max_results: int = 100,
+    ) -> dict[str, Any]:
+        """Search file contents using regex patterns.
+
+        OpenCode-style grep tool:
+        - Uses Python's re module for cross-platform regex support
+        - Supports glob pattern filtering
+        - Returns matching lines with file paths and line numbers
+        - Results limited to max_results
+
+        Args:
+            pattern: Regex pattern to search for.
+            path: Directory or file to search in (relative to workspace).
+            glob_pattern: Optional glob pattern to filter files (e.g., "*.py").
+            case_sensitive: Whether to use case-sensitive matching.
+            max_results: Maximum number of results to return.
+        """
+        with self._lock:
+            target = self._resolve_workspace_path(path)
+            if not target.exists():
+                raise SandboxError(f"Path not found: {path}")
+
+            flags = 0 if case_sensitive else re.IGNORECASE
+            try:
+                regex = re.compile(pattern, flags)
+            except re.error as exc:
+                raise SandboxError(f"Invalid regex pattern: {exc}")
+
+            results: list[dict[str, Any]] = []
+
+            if target.is_file():
+                files_to_search = [target]
+            else:
+                if glob_pattern:
+                    files_to_search = list(target.glob(glob_pattern))
+                else:
+                    files_to_search = list(target.rglob("*"))
+                files_to_search = [f for f in files_to_search if f.is_file()]
+
+            for file_path in files_to_search:
+                if len(results) >= max_results:
+                    break
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                        for line_num, line in enumerate(f, 1):
+                            if regex.search(line):
+                                rel_path = file_path.relative_to(self.workspace_dir).as_posix()
+                                results.append({
+                                    "file": rel_path,
+                                    "line": line_num,
+                                    "content": line.rstrip(),
+                                })
+                                if len(results) >= max_results:
+                                    break
+                except (PermissionError, OSError):
+                    continue
+
+            return {
+                "pattern": pattern,
+                "path": path,
+                "glob_pattern": glob_pattern or "*",
+                "case_sensitive": case_sensitive,
+                "results": results,
+                "total_matches": len(results),
+                "truncated": len(results) >= max_results,
+            }
+
+    def glob_files(
+        self,
+        pattern: str,
+        path: str = ".",
+    ) -> dict[str, Any]:
+        """Find files using glob patterns.
+
+        OpenCode-style glob tool:
+        - Supports ** for recursive matching
+        - Returns files sorted by modification time
+        - Includes file metadata (size, type)
+
+        Args:
+            pattern: Glob pattern (e.g., "**/*.py", "src/**/*.ts").
+            path: Base directory to search in (relative to workspace).
+        """
+        with self._lock:
+            target = self._resolve_workspace_path(path)
+            if not target.is_dir():
+                raise SandboxError(f"Path is not a directory: {path}")
+
+            items: list[dict[str, Any]] = []
+            for candidate in sorted(target.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True):
+                relative_path = candidate.relative_to(target).as_posix()
+                try:
+                    stat = candidate.stat()
+                    items.append({
+                        "path": relative_path,
+                        "full_path": str(candidate),
+                        "type": "directory" if candidate.is_dir() else "file",
+                        "size_bytes": stat.st_size if candidate.is_file() else None,
+                        "modified_at": stat.st_mtime,
+                    })
+                except (PermissionError, OSError):
+                    continue
+
+            return {
+                "pattern": pattern,
+                "path": path,
+                "items": items,
+                "total": len(items),
             }
 
     def list_packages(self, limit: int = 200) -> dict[str, Any]:

@@ -129,7 +129,7 @@ class ArtifactConfig(BaseModel):
 
 class SandboxConfig(BaseModel):
     enabled: bool = True
-    isolation_mode: Literal["session", "user"] = "user"
+    isolation_mode: Literal["session", "user", "project"] = "project"
     shared_root_dir: str = "./data/sandboxes"
     default_user_id: str = "local-default-user"
     root_subdir: str = "sandbox"
@@ -199,6 +199,13 @@ class CompactionConfig(BaseModel):
     reserved_chars: int = 4000
     min_turns: int = 4
     retain_recent_turns: int = 2
+    context_window_tokens: int = 128000
+    reserved_tokens: int = 8000
+    compact_after_tokens: int = 90000
+    compact_after_turns: int = 12
+    keep_first_turns: int = 1
+    keep_last_turns: int = 4
+    use_token_counting: bool = True
     # Large file handling
     max_file_read_chars: int = 24000  # Increased from 12000 for large files
     enable_chunked_read: bool = True  # Enable offset/limit based file reading

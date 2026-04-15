@@ -34,6 +34,7 @@ class BaseAgentHarness(ErrorHealingMixin, _AgentBuilderMixin):
         self,
         config: AppConfig,
         artifact_session_name: str | None = None,
+        artifact_project_dir: str | None = None,
         sandbox_user_id: str | None = None,
         permission_interceptor: Any | None = None,
     ) -> None:
@@ -43,6 +44,7 @@ class BaseAgentHarness(ErrorHealingMixin, _AgentBuilderMixin):
         self.runtime = PentestRuntime(
             config,
             artifact_session_name=artifact_session_name,
+            artifact_project_dir=artifact_project_dir,
             sandbox_user_id=sandbox_user_id,
         )
         self.cost_tracker = CostTracker()
@@ -309,9 +311,13 @@ class BaseAgentHarness(ErrorHealingMixin, _AgentBuilderMixin):
             except asyncio.TimeoutError:
                 continue
             event = _build_stream_event(msg, last)
-            if loop_guard is not None and loop_guard.observe(event):
-                with contextlib.suppress(Exception):
-                    await self.agent.interrupt()
+            if loop_guard is not None:
+                loop_reason = loop_guard.observe(event)
+                if loop_reason:
+                    logger.info(
+                        "Loop guard detected a repeated branch; deferring recovery to the next turn without hard interrupt: %s",
+                        loop_reason,
+                    )
             if stream_callback is not None:
                 with contextlib.suppress(Exception):
                     stream_callback(event)

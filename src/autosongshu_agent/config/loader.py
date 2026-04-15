@@ -117,6 +117,21 @@ _ENV_OVERRIDES: dict[tuple[str, ...], tuple[str, ...]] = {
     ("compaction", "retain_recent_turns"): (
         "AUTOSONGSHU_COMPACTION_RETAIN_RECENT_TURNS",
     ),
+    ("compaction", "context_window_tokens"): (
+        "AUTOSONGSHU_COMPACTION_CONTEXT_WINDOW_TOKENS",
+    ),
+    ("compaction", "reserved_tokens"): ("AUTOSONGSHU_COMPACTION_RESERVED_TOKENS",),
+    ("compaction", "compact_after_tokens"): (
+        "AUTOSONGSHU_COMPACTION_COMPACT_AFTER_TOKENS",
+    ),
+    ("compaction", "compact_after_turns"): (
+        "AUTOSONGSHU_COMPACTION_COMPACT_AFTER_TURNS",
+    ),
+    ("compaction", "keep_first_turns"): ("AUTOSONGSHU_COMPACTION_KEEP_FIRST_TURNS",),
+    ("compaction", "keep_last_turns"): ("AUTOSONGSHU_COMPACTION_KEEP_LAST_TURNS",),
+    ("compaction", "use_token_counting"): (
+        "AUTOSONGSHU_COMPACTION_USE_TOKEN_COUNTING",
+    ),
 }
 _BOOL_ENV_FIELDS: set[tuple[str, ...]] = {
     ("model", "stream"),
@@ -134,6 +149,7 @@ _BOOL_ENV_FIELDS: set[tuple[str, ...]] = {
     ("agent", "loop_guard_enabled"),
     ("compaction", "auto"),
     ("compaction", "prune"),
+    ("compaction", "use_token_counting"),
 }
 _INT_ENV_FIELDS: set[tuple[str, ...]] = {
     ("model", "max_tokens"),
@@ -150,6 +166,12 @@ _INT_ENV_FIELDS: set[tuple[str, ...]] = {
     ("compaction", "reserved_chars"),
     ("compaction", "min_turns"),
     ("compaction", "retain_recent_turns"),
+    ("compaction", "context_window_tokens"),
+    ("compaction", "reserved_tokens"),
+    ("compaction", "compact_after_tokens"),
+    ("compaction", "compact_after_turns"),
+    ("compaction", "keep_first_turns"),
+    ("compaction", "keep_last_turns"),
 }
 _FLOAT_ENV_FIELDS: set[tuple[str, ...]] = {
     ("model", "temperature"),

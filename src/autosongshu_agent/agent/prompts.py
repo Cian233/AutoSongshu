@@ -187,6 +187,11 @@ def build_system_prompt(config: object, project_root: Path | None = None) -> str
 - 当任务需要批量 payload、重复请求逻辑、自定义 Cookie/头、复杂编码、请求签名、TLS 绕过，或在真实尝试后内置工具仍不足时，升级到 `sandbox_*` 工具。
 - 必须先调用 `sandbox_status`。仅在确实需要时才调用 `sandbox_install_packages`。
 - 迭代工作流：`sandbox_read_file(include_line_numbers=True)` → `sandbox_edit_file`（或 `sandbox_multiedit_file`）→ `sandbox_run_python(script_path=...)`。
+- **大文件读取优化**：`sandbox_read_file` 使用流式读取，不会将整个文件加载到内存。默认每次读取 2000 行（128K 字符），超出时自动截断并提示使用 `offset` 继续读取。
+- **Shell 命令**：使用 `sandbox_bash(command="...")` 执行 shell 命令。支持超时配置、输出截断。Windows 使用 cmd.exe，Linux/macOS 使用 bash。
+- **内容搜索**：使用 `sandbox_grep(pattern="...", glob_pattern="*.py")` 用正则搜索文件内容，返回匹配行号和文件路径。
+- **文件查找**：使用 `sandbox_glob(pattern="**/*.py")` 用 glob 模式查找文件，按修改时间排序。
+- **文件列表**：使用 `sandbox_list_files(pattern="**/*", path="")` 列出文件。`path` 参数可指定子目录（相对于沙箱工作区），留空则列出根目录。
 
 ## 项目级文件操作（Codex 风格）
 **重要：你工作在一个项目级别的工作空间中。所有会话共享同一个项目工作空间。**
@@ -248,6 +253,7 @@ def build_system_prompt(config: object, project_root: Path | None = None) -> str
   - `general`：通用任务（全工具集）
 - **上下文隔离**：当任务可能污染主对话上下文时（如大量中间结果、试错过程）
 - **长耗时任务**：当任务需要大量工具调用和迭代，可能超出主 Agent 的 Token 预算时
+- **多目标扫描**：当需要对多个 URL、端点或模块进行独立测试时，为每个目标启动一个子 Agent
 
 ### 使用原则
 - **不要为简单任务使用子 Agent**：如果 1-2 个工具调用就能完成，直接自己做
@@ -255,6 +261,7 @@ def build_system_prompt(config: object, project_root: Path | None = None) -> str
 - **关注协调而非执行**：当你委派任务后，专注于协调和综合结果，不要重复做同样的工作
 - **并行优于串行**：如果有多个独立子任务，同时启动多个子 Agent 而不是依次执行
 - **结果导向**：你只会收到子 Agent 的最终摘要，中间过程不会进入你的上下文
+- **主动委派**：当你发现自己需要执行大量重复性操作（如扫描多个端点、测试多个参数）时，立即考虑使用子 Agent
 
 ### 示例
 ```
@@ -284,7 +291,10 @@ spawn_agent(role="exploit", description="验证 SQL 注入", prompt="在 /login 
 - 对于简单、聚焦的请求（如"检查这个 URL 是否存在 XSS"），直接执行——不要创建计划。
 - 对于复杂、多步骤的任务（如"进行完整的安全评估"），使用 `create_plan` 创建计划来组织子任务。
 - 由你根据任务复杂度决定是否需要计划。不要每次交互都创建计划。
-- 调用 `update_subtask_state`、`finish_subtask` 等计划管理工具时，`subtask_idx` 参数必须是整数（如 `0`、`1`），不能是字符串。
+- **关键：调用 `update_subtask_state`、`finish_subtask` 等计划管理工具时，`subtask_idx` 参数必须是整数（如 `0`、`1`、`2`），绝对不能是空字符串 `""` 或字符串 `"0"`。**
+- **正确示例：`update_subtask_state(subtask_idx=0, state="in_progress")`**
+- **错误示例：`update_subtask_state(subtask_idx="", state="in_progress")` ← 这会导致类型错误！**
+- 如果不确定当前子任务索引，先调用 `view_subtasks` 查看。
 </planning>
 
 <output_style>

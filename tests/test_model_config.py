@@ -130,6 +130,43 @@ class ModelSamplingConfigTests(unittest.TestCase):
             config.sandbox.bootstrap_packages, ["requests", "httpx", "rich"]
         )
 
+    def test_load_config_reads_token_compaction_overrides_from_env_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                dedent(
+                    """
+                    model:
+                      model_name: gpt-4.1-mini
+                      api_key: test-key
+
+                    engagement:
+                      start_url: https://example.test/
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            (root / ".env").write_text(
+                "\n".join(
+                    [
+                        "AUTOSONGSHU_COMPACTION_USE_TOKEN_COUNTING=true",
+                        "AUTOSONGSHU_COMPACTION_CONTEXT_WINDOW_TOKENS=64000",
+                        "AUTOSONGSHU_COMPACTION_RESERVED_TOKENS=6000",
+                        "AUTOSONGSHU_COMPACTION_COMPACT_AFTER_TOKENS=42000",
+                    ],
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True):
+                config = load_config(config_path)
+
+        self.assertTrue(config.compaction.use_token_counting)
+        self.assertEqual(config.compaction.context_window_tokens, 64000)
+        self.assertEqual(config.compaction.reserved_tokens, 6000)
+        self.assertEqual(config.compaction.compact_after_tokens, 42000)
+
     def test_build_model_passes_sampling_parameters(self) -> None:
         builder = _Builder()
         builder.config = AppConfig(

@@ -37,12 +37,14 @@ class PentestConversationSession(BaseAgentHarness):
         self,
         config: AppConfig,
         artifact_session_name: str | None = None,
+        artifact_project_dir: str | None = None,
         sandbox_user_id: str | None = None,
         permission_interceptor: Any | None = None,
     ) -> None:
         super().__init__(
             config,
             artifact_session_name=artifact_session_name,
+            artifact_project_dir=artifact_project_dir,
             sandbox_user_id=sandbox_user_id,
             permission_interceptor=permission_interceptor,
         )
@@ -276,7 +278,6 @@ class PentestConversationSession(BaseAgentHarness):
                 _prepare_user_message(
                     user_message,
                     self.skill_report,
-                    getattr(self, "_memory_context", ""),
                 ),
             )
             assistant_message, blocks = _extract_response_blocks(response.content)
