@@ -47,11 +47,15 @@ interface ModelState {
   isSaving: boolean;
 
   // Actions
-  fetchProfiles: () => Promise<void>;
-  setActiveProfile: (name: string) => Promise<boolean>;
-  addProfile: (input: NewProfileInput) => Promise<boolean>;
-  deleteProfile: (name: string) => Promise<boolean>;
-  updateProfile: (name: string, patch: Record<string, unknown>) => Promise<boolean>;
+  fetchProfiles: (configPath?: string) => Promise<void>;
+  setActiveProfile: (name: string, configPath?: string) => Promise<boolean>;
+  addProfile: (input: NewProfileInput, configPath?: string) => Promise<boolean>;
+  deleteProfile: (name: string, configPath?: string) => Promise<boolean>;
+  updateProfile: (
+    name: string,
+    patch: Record<string, unknown>,
+    configPath?: string,
+  ) => Promise<boolean>;
 }
 
 // ── Store ────────────────────────────────────────────────────────
@@ -63,11 +67,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
   error: null,
   isSaving: false,
 
-  fetchProfiles: async () => {
+  fetchProfiles: async (configPath?: string) => {
     set({ isLoading: true, error: null });
     try {
+      const path = (configPath || "").trim();
+      const endpoint = path
+        ? `${API_ENDPOINTS.MODELS}?config_path=${encodeURIComponent(path)}`
+        : API_ENDPOINTS.MODELS;
       const payload = await fetchJson<{ profiles: ModelProfile[] }>(
-        API_ENDPOINTS.MODELS,
+        endpoint,
       );
       const profiles = payload.profiles || [];
       const active = profiles.find((p) => p.is_active);
@@ -82,12 +90,17 @@ export const useModelStore = create<ModelState>((set, get) => ({
     }
   },
 
-  setActiveProfile: async (name: string) => {
+  setActiveProfile: async (name: string, configPath?: string) => {
     try {
+      const payload: Record<string, unknown> = { profile_name: name };
+      const path = (configPath || "").trim();
+      if (path) {
+        payload.config_path = path;
+      }
       await fetchJson(API_ENDPOINTS.MODELS_ACTIVE, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profile_name: name }),
+        body: JSON.stringify(payload),
       });
       set((state) => ({
         activeProfile: name,
@@ -97,25 +110,33 @@ export const useModelStore = create<ModelState>((set, get) => ({
         })),
       }));
       return true;
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set({ error: message });
       return false;
     }
   },
 
-  addProfile: async (input: NewProfileInput) => {
+  addProfile: async (input: NewProfileInput, configPath?: string) => {
     set({ isSaving: true, error: null });
     try {
+      const payload: Record<string, unknown> = { profile: input };
+      const path = (configPath || "").trim();
+      if (path) {
+        payload.config_path = path;
+      }
       const result = await fetchJson<{ ok: boolean; profile: ModelProfile }>(
         API_ENDPOINTS.MODELS_ADD,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ profile: input }),
+          body: JSON.stringify(payload),
         },
       );
       if (result.ok && result.profile) {
         // Re-fetch to get the full updated list
-        await get().fetchProfiles();
+        await get().fetchProfiles(configPath);
+        set({ isSaving: false });
         return true;
       }
       set({ isSaving: false });
@@ -127,13 +148,18 @@ export const useModelStore = create<ModelState>((set, get) => ({
     }
   },
 
-  deleteProfile: async (name: string) => {
+  deleteProfile: async (name: string, configPath?: string) => {
     set({ isSaving: true, error: null });
     try {
-      await fetchJson(`/api/models/${encodeURIComponent(name)}`, {
+      const path = (configPath || "").trim();
+      const endpoint = path
+        ? `/api/models/${encodeURIComponent(name)}?config_path=${encodeURIComponent(path)}`
+        : `/api/models/${encodeURIComponent(name)}`;
+      await fetchJson(endpoint, {
         method: "DELETE",
       });
-      await get().fetchProfiles();
+      await get().fetchProfiles(configPath);
+      set({ isSaving: false });
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -142,15 +168,22 @@ export const useModelStore = create<ModelState>((set, get) => ({
     }
   },
 
-  updateProfile: async (name: string, patch: Record<string, unknown>) => {
+  updateProfile: async (
+    name: string,
+    patch: Record<string, unknown>,
+    configPath?: string,
+  ) => {
     set({ isSaving: true, error: null });
     try {
+      const path = (configPath || "").trim();
+      const payload = path ? { ...patch, config_path: path } : patch;
       await fetchJson(API_ENDPOINTS.MODELS_UPDATE(name), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
+        body: JSON.stringify(payload),
       });
-      await get().fetchProfiles();
+      await get().fetchProfiles(configPath);
+      set({ isSaving: false });
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

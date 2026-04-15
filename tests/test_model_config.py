@@ -14,6 +14,7 @@ from autosongshu_agent.config import (
     ModelConfig,
     load_config,
 )
+from autosongshu_agent.model_router import ModelRouter, parse_profiles_from_config
 
 
 class _Builder(_AgentBuilderMixin):
@@ -216,6 +217,67 @@ class ModelSamplingConfigTests(unittest.TestCase):
                 "top_p": 0.95,
             },
         )
+
+    def test_parse_profiles_keeps_pydantic_profile_names(self) -> None:
+        model_config = ModelConfig(
+            model_name="legacy-model",
+            api_key="legacy-key",
+            profiles=[
+                {
+                    "name": "primary",
+                    "provider": "openai",
+                    "model_name": "gpt-4o",
+                    "tasks": ["general", "reasoning"],
+                },
+                {
+                    "name": "fallback",
+                    "provider": "dashscope",
+                    "model_name": "qwen3.6-plus",
+                    "tasks": ["search"],
+                },
+            ],
+        )
+
+        profiles = parse_profiles_from_config(model_config)
+
+        self.assertEqual([p.name for p in profiles], ["primary", "fallback"])
+        self.assertEqual(profiles[0].provider.value, "openai")
+        self.assertEqual(profiles[1].provider.value, "dashscope")
+        self.assertIn("reasoning", [task.value for task in profiles[0].tasks])
+        self.assertIn("search", [task.value for task in profiles[1].tasks])
+
+    def test_router_keeps_multiple_profiles_from_pydantic_config(self) -> None:
+        model_config = ModelConfig(
+            model_name="legacy-model",
+            api_key="legacy-key",
+            active="secondary",
+            profiles=[
+                {
+                    "name": "primary",
+                    "provider": "openai",
+                    "model_name": "gpt-4o",
+                    "tasks": ["general"],
+                },
+                {
+                    "name": "secondary",
+                    "provider": "deepseek",
+                    "model_name": "deepseek-chat",
+                    "tasks": ["general"],
+                },
+            ],
+        )
+
+        router = ModelRouter(
+            profiles=parse_profiles_from_config(model_config),
+            default_profile_name=model_config.active,
+        )
+
+        listed = router.list_profiles()
+        self.assertEqual(len(listed), 2)
+        self.assertEqual({item["name"] for item in listed}, {"primary", "secondary"})
+        active = [item for item in listed if item.get("is_active")]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["name"], "secondary")
 
 
 if __name__ == "__main__":

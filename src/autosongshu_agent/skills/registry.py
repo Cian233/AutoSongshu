@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from collections import deque
+from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,44 @@ from .models import (
 )
 
 
+@dataclass(slots=True)
+class _SkillParseCacheEntry:
+    skill_mtime_ns: int
+    skill_size: int
+    scripts_root_exists: bool
+    tracked_dir_mtimes: dict[str, int]
+    loaded_skill: LoadedSkill
+
+    def is_valid(self, skill_file: Path, scripts_root: Path) -> bool:
+        try:
+            skill_stat = skill_file.stat()
+        except OSError:
+            return False
+
+        if (
+            skill_stat.st_mtime_ns != self.skill_mtime_ns
+            or skill_stat.st_size != self.skill_size
+        ):
+            return False
+
+        if scripts_root.is_dir() != self.scripts_root_exists:
+            return False
+
+        for dir_path, expected_mtime in self.tracked_dir_mtimes.items():
+            try:
+                current_mtime = Path(dir_path).stat().st_mtime_ns
+            except OSError:
+                return False
+            if current_mtime != expected_mtime:
+                return False
+
+        return True
+
+
+_SKILL_PARSE_CACHE: dict[str, _SkillParseCacheEntry] = {}
+_SKILL_PARSE_CACHE_LOCK = threading.RLock()
+
+
 class SkillRegistry:
     _log = logging.getLogger("autosongshu.skills")
 
@@ -33,6 +73,7 @@ class SkillRegistry:
     ) -> None:
         self.directories = directories
         self.context = context or SkillRuntimeContext()
+        self._bin_lookup_cache: dict[str, bool] = {}
 
     def register(self, toolkit: Toolkit) -> SkillLoadReport:
         report = SkillLoadReport(
@@ -101,20 +142,11 @@ class SkillRegistry:
                     continue
 
                 existing_path = registered_names.get(loaded_skill.canonical_name)
-                if existing_path is not None:
-                    report.skipped.append(
-                        SkillLoadEvent(
-                            status="skipped",
-                            path=loaded_skill.directory,
-                            name=loaded_skill.name,
-                            source_directory=loaded_skill.source_directory,
-                            reason=(
-                                "Duplicate skill name encountered; keeping the earlier registration "
-                                f"from {existing_path}."
-                            ),
-                        ),
-                    )
-                    continue
+                existing_skill = (
+                    self._find_registered_skill(report, existing_path)
+                    if existing_path is not None
+                    else None
+                )
 
                 availability_reason = self._availability_reason(loaded_skill)
                 if availability_reason is not None:
@@ -149,6 +181,39 @@ class SkillRegistry:
                     report.loaded.append(loaded_skill)
                 else:
                     report.manual_available.append(loaded_skill)
+
+                if existing_path is not None:
+                    replaced = self._pop_registered_skill(report, existing_path)
+                    if replaced is not None and replaced.auto_activate:
+                        self._try_unregister_agent_skill(toolkit, replaced.name)
+                    report.skipped.append(
+                        SkillLoadEvent(
+                            status="skipped",
+                            path=existing_path,
+                            name=(
+                                replaced.name
+                                if replaced is not None
+                                else (
+                                    existing_skill.name
+                                    if existing_skill is not None
+                                    else loaded_skill.name
+                                )
+                            ),
+                            source_directory=(
+                                replaced.source_directory
+                                if replaced is not None
+                                else (
+                                    existing_skill.source_directory
+                                    if existing_skill is not None
+                                    else loaded_skill.source_directory
+                                )
+                            ),
+                            reason=(
+                                "Skill name overridden by a later registration from "
+                                f"{loaded_skill.directory}."
+                            ),
+                        ),
+                    )
 
                 registered_names[loaded_skill.canonical_name] = loaded_skill.directory
                 seen_paths.add(loaded_skill.directory)
@@ -199,6 +264,18 @@ class SkillRegistry:
 
     def _load_skill(self, skill_dir: Path, source_directory: Path) -> LoadedSkill:
         skill_file = skill_dir / SKILL_MARKDOWN
+        scripts_root = skill_dir / SKILL_SCRIPTS_DIR
+        resolved_dir = str(skill_dir.resolve())
+        resolved_source = str(source_directory.resolve())
+
+        with _SKILL_PARSE_CACHE_LOCK:
+            cache_entry = _SKILL_PARSE_CACHE.get(resolved_dir)
+
+        if cache_entry is not None and cache_entry.is_valid(skill_file, scripts_root):
+            return self._clone_cached_skill(
+                cache_entry.loaded_skill, source_directory=resolved_source
+            )
+
         metadata, body = _parse_skill_file(skill_file)
 
         raw_name = metadata.get("name")
@@ -236,16 +313,15 @@ class SkillRegistry:
         requires_bins = _coerce_string_list(metadata.get("requires_bins"), "requires_bins")
         timeout = int(metadata.get("timeout") or 0)
         when_to_use = str(metadata.get("when_to_use") or "").strip()
-        scripts = _discover_skill_scripts(skill_dir)
+        scripts, tracked_dir_mtimes = _discover_skill_scripts_with_tracking(skill_dir)
         scripts_dir = (
             str((skill_dir / SKILL_SCRIPTS_DIR).resolve()) if scripts else None
         )
-
-        return LoadedSkill(
+        loaded_skill = LoadedSkill(
             name=name,
             description=description,
-            directory=str(skill_dir.resolve()),
-            source_directory=str(source_directory.resolve()),
+            directory=resolved_dir,
+            source_directory=resolved_source,
             body=body,
             activation_mode=activation_mode,
             requires_tools=requires_tools,
@@ -261,6 +337,64 @@ class SkillRegistry:
             scripts_dir=scripts_dir,
             scripts=scripts,
         )
+
+        try:
+            skill_stat = skill_file.stat()
+        except OSError:
+            return loaded_skill
+
+        with _SKILL_PARSE_CACHE_LOCK:
+            _SKILL_PARSE_CACHE[resolved_dir] = _SkillParseCacheEntry(
+                skill_mtime_ns=skill_stat.st_mtime_ns,
+                skill_size=skill_stat.st_size,
+                scripts_root_exists=scripts_root.is_dir(),
+                tracked_dir_mtimes=tracked_dir_mtimes,
+                loaded_skill=loaded_skill,
+            )
+
+        return loaded_skill
+
+    def _clone_cached_skill(
+        self, cached: LoadedSkill, *, source_directory: str
+    ) -> LoadedSkill:
+        if cached.source_directory == source_directory:
+            return cached
+        return replace(cached, source_directory=source_directory)
+
+    def _find_registered_skill(
+        self, report: SkillLoadReport, skill_path: str | None
+    ) -> LoadedSkill | None:
+        if not skill_path:
+            return None
+        for collection in (report.loaded, report.manual_available):
+            for item in collection:
+                if item.directory == skill_path:
+                    return item
+        return None
+
+    def _pop_registered_skill(
+        self, report: SkillLoadReport, skill_path: str | None
+    ) -> LoadedSkill | None:
+        if not skill_path:
+            return None
+        for collection in (report.loaded, report.manual_available):
+            for index, item in enumerate(collection):
+                if item.directory == skill_path:
+                    return collection.pop(index)
+        return None
+
+    def _try_unregister_agent_skill(self, toolkit: Toolkit, skill_name: str) -> None:
+        remove_skill = getattr(toolkit, "remove_agent_skill", None)
+        if not callable(remove_skill):
+            return
+        try:
+            remove_skill(skill_name)
+        except Exception as exc:
+            self._log.warning(
+                "Failed to unregister overridden skill %s: %s",
+                skill_name,
+                exc,
+            )
 
     def _availability_reason(self, skill: LoadedSkill) -> str | None:
         missing_tools = [
@@ -286,10 +420,14 @@ class SkillRegistry:
         if skill.requires_bins:
             import shutil
 
-            missing_bins = [
-                bin_name for bin_name in skill.requires_bins
-                if shutil.which(bin_name) is None
-            ]
+            missing_bins: list[str] = []
+            for bin_name in skill.requires_bins:
+                available = self._bin_lookup_cache.get(bin_name)
+                if available is None:
+                    available = shutil.which(bin_name) is not None
+                    self._bin_lookup_cache[bin_name] = available
+                if not available:
+                    missing_bins.append(bin_name)
             if missing_bins:
                 self._log.warning("Skill %s skipped: missing binaries %s", skill.name, missing_bins)
                 return f"Missing required binaries: {', '.join(missing_bins)}."
@@ -342,15 +480,24 @@ def _active_tool_names(toolkit: Toolkit) -> set[str]:
 
 
 def _discover_skill_scripts(skill_dir: Path) -> list[SkillScript]:
+    scripts, _ = _discover_skill_scripts_with_tracking(skill_dir)
+    return scripts
+
+
+def _discover_skill_scripts_with_tracking(
+    skill_dir: Path,
+) -> tuple[list[SkillScript], dict[str, int]]:
     scripts_root = skill_dir / SKILL_SCRIPTS_DIR
     if not scripts_root.is_dir():
-        return []
+        return [], {}
 
     scripts: list[SkillScript] = []
+    tracked_dir_mtimes: dict[str, int] = {}
     queue: deque[Path] = deque([scripts_root])
     while queue:
         current = queue.popleft()
         try:
+            tracked_dir_mtimes[str(current.resolve())] = current.stat().st_mtime_ns
             children = sorted(current.iterdir(), key=lambda item: item.name.lower())
         except OSError:
             continue
@@ -376,7 +523,7 @@ def _discover_skill_scripts(skill_dir: Path) -> list[SkillScript]:
                 ),
             )
 
-    return scripts
+    return scripts, tracked_dir_mtimes
 
 
 def _parse_skill_file(path: Path) -> tuple[dict[str, Any], str]:

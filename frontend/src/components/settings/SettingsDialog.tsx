@@ -109,7 +109,7 @@ export const SettingsDialog: React.FC = () => {
 
     async function loadData() {
       // Load models
-      fetchProfiles().catch(() => {});
+      fetchProfiles(configPath || undefined).catch(() => {});
 
       // Load authorizations
       try {
@@ -141,14 +141,14 @@ export const SettingsDialog: React.FC = () => {
     async (name: string) => {
       if (name === activeProfile) return;
       setSwitchingModel(name);
-      const ok = await setActiveProfile(name);
+      const ok = await setActiveProfile(name, configPath || undefined);
       if (!ok) {
         setSwitchingModel(null);
       }
       // Keep spinner until profiles are re-fetched
       setTimeout(() => setSwitchingModel(null), 600);
     },
-    [activeProfile, setActiveProfile],
+    [activeProfile, setActiveProfile, configPath],
   );
 
   const handleReloadConfig = useCallback(async () => {
@@ -161,7 +161,7 @@ export const SettingsDialog: React.FC = () => {
         body: JSON.stringify(body),
       });
       // Re-fetch models after config reload
-      await fetchProfiles();
+      await fetchProfiles(configPath || undefined);
       window.alert("配置已重新加载成功");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -330,9 +330,11 @@ export const SettingsDialog: React.FC = () => {
               isSaving={modelsSaving}
               switchingModel={switchingModel}
               onSwitch={handleSwitchModel}
-              onAdd={addProfile}
-              onDelete={deleteProfile}
-              onUpdate={updateProfile}
+              onAdd={(input) => addProfile(input, configPath || undefined)}
+              onDelete={(name) => deleteProfile(name, configPath || undefined)}
+              onUpdate={(name, patch) =>
+                updateProfile(name, patch, configPath || undefined)
+              }
             />
           )}
 

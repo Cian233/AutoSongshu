@@ -31,6 +31,7 @@ class ModelProfileConfig(BaseModel):
     enabled: bool = True
     cost_per_1m_input: float = 0.0
     cost_per_1m_output: float = 0.0
+    compaction: dict[str, int | bool] | None = None
 
 
 class ModelConfig(BaseModel):

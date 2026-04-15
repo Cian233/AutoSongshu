@@ -544,7 +544,7 @@ class ChatSessionManager:
         collect_url(session.start_url)
 
         lines = [
-            "Pinned session context. Keep this context across turns unless the user explicitly changes scope or target.",
+            "Pinned session context. Use this as background continuity, but always prioritize the latest explicit user instruction in the current turn.",
         ]
         if initial_goal:
             lines.append(f"- Original user task: {_truncate_text(initial_goal, 500)}")
@@ -574,7 +574,10 @@ class ChatSessionManager:
                 "- Prefer editing and reusing these existing scripts before creating a new sandbox file when continuing the same task."
             )
         lines.append(
-            "- When the current user turn is short or only provides a delta, continue using the original task and exact target URLs above."
+            "- If the latest user turn explicitly changes objective, scope, URLs, or constraints, treat that latest turn as the source of truth."
+        )
+        lines.append(
+            "- Only treat very short replies (for example: continue/ok) as continuation signals when no new target or requirement is introduced."
         )
         return "\n".join(lines)
 

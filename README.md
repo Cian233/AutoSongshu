@@ -170,6 +170,4 @@ docker-compose down
 
 ## 交流群
 
-![加群二维码](./img/qrcode_1774443747440.jpg)
-
 点击加入AutoSongshu交流群：[1085788277](https://qm.qq.com/q/x0lEkhztCw)

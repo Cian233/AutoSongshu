@@ -373,71 +373,119 @@ def save_config(path: str | Path, config: AppConfig) -> None:
     """
     config_path = Path(path).resolve()
 
-    # Read existing raw YAML
-    existing_raw: dict[str, Any] = {}
-    if config_path.exists():
-        try:
-            existing_raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            existing_raw = {}
-
-    # Build the model section to write
-    model = config.model
-    model_dict: dict[str, Any] = {}
-
-    # Preserve env-var references for api_key if the current value matches
-    existing_model = existing_raw.get("model", {})
-    _preserve_env_ref(model_dict, existing_model, "api_key", model.api_key)
-
-    model_dict["model_name"] = model.model_name
-    if model.base_url:
-        _preserve_env_ref(model_dict, existing_model, "base_url", model.base_url)
-    model_dict["temperature"] = model.temperature
-    model_dict["top_p"] = model.top_p
-    if model.max_tokens is not None:
-        model_dict["max_tokens"] = model.max_tokens
-    model_dict["timeout"] = model.timeout
-    model_dict["stream"] = model.stream
-    if model.fallbacks:
-        model_dict["fallbacks"] = model.fallbacks
-
-    # Multi-model fields
-    if model.active:
-        model_dict["active"] = model.active
-    if model.profiles:
-        model_dict["profiles"] = model.profiles
-
-    # Merge into existing config
-    existing_raw["model"] = model_dict
-
-    # Persist compaction section if non-default values exist
-    compaction = config.compaction
-    compaction_dict: dict[str, Any] = {}
-    _COMPACTION_DEFAULTS = {
-        "auto": True, "prune": True, "trigger_chars": 18000,
-        "reserved_chars": 4000, "min_turns": 4, "retain_recent_turns": 2,
-        "context_window_tokens": 128000, "reserved_tokens": 8000,
-        "compact_after_tokens": 90000, "compact_after_turns": 12,
-        "keep_first_turns": 1, "keep_last_turns": 4, "use_token_counting": True,
-    }
-    for key, default in _COMPACTION_DEFAULTS.items():
-        val = getattr(compaction, key, default)
-        if val != default:
-            compaction_dict[key] = val
-    if compaction_dict:
-        existing_raw["compaction"] = compaction_dict
-    elif "compaction" in existing_raw:
-        # Keep existing compaction section if we have nothing to change
-        pass
-
-    # Write back
-    config_path.parent.mkdir(parents=True, exist_ok=True)
+    # Keep the full read-modify-write cycle under one lock so concurrent
+    # writes do not overwrite each other with stale YAML snapshots.
     with _config_lock:
+        existing_raw: dict[str, Any] = {}
+        if config_path.exists():
+            try:
+                existing_raw = (
+                    yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                )
+            except Exception:
+                existing_raw = {}
+
+        # Build the model section to write
+        model = config.model
+        model_dict: dict[str, Any] = {}
+
+        # Preserve env-var references for api_key if the current value matches
+        existing_model = existing_raw.get("model", {})
+        _preserve_env_ref(model_dict, existing_model, "api_key", model.api_key)
+
+        model_dict["model_name"] = model.model_name
+        if model.base_url:
+            _preserve_env_ref(model_dict, existing_model, "base_url", model.base_url)
+        model_dict["temperature"] = model.temperature
+        model_dict["top_p"] = model.top_p
+        if model.max_tokens is not None:
+            model_dict["max_tokens"] = model.max_tokens
+        model_dict["timeout"] = model.timeout
+        model_dict["stream"] = model.stream
+        if model.fallbacks:
+            model_dict["fallbacks"] = model.fallbacks
+
+        # Multi-model fields
+        if model.active:
+            model_dict["active"] = model.active
+        if model.profiles:
+            serialized_profiles: list[dict[str, Any]] = []
+            for raw_profile in model.profiles:
+                profile_dict: dict[str, Any] | None = None
+                if isinstance(raw_profile, dict):
+                    profile_dict = dict(raw_profile)
+                else:
+                    model_dump = getattr(raw_profile, "model_dump", None)
+                    if callable(model_dump):
+                        dumped = model_dump(exclude_none=True)
+                        if isinstance(dumped, dict):
+                            profile_dict = dumped
+                    if profile_dict is None:
+                        legacy_dump = getattr(raw_profile, "dict", None)
+                        if callable(legacy_dump):
+                            dumped = legacy_dump(exclude_none=True)
+                            if isinstance(dumped, dict):
+                                profile_dict = dumped
+
+                if not profile_dict:
+                    continue
+
+                profile_name = str(profile_dict.get("name", "") or "").strip()
+                if not profile_name:
+                    profile_name = str(
+                        profile_dict.get("model_name", "") or ""
+                    ).strip()
+                    if profile_name:
+                        profile_dict["name"] = profile_name
+                if not profile_name:
+                    continue
+
+                serialized_profiles.append(profile_dict)
+
+            if serialized_profiles:
+                model_dict["profiles"] = serialized_profiles
+
+        # Merge into existing config
+        existing_raw["model"] = model_dict
+
+        # Persist compaction section if non-default values exist
+        compaction = config.compaction
+        compaction_dict: dict[str, Any] = {}
+        _COMPACTION_DEFAULTS = {
+            "auto": True,
+            "prune": True,
+            "trigger_chars": 18000,
+            "reserved_chars": 4000,
+            "min_turns": 4,
+            "retain_recent_turns": 2,
+            "context_window_tokens": 128000,
+            "reserved_tokens": 8000,
+            "compact_after_tokens": 90000,
+            "compact_after_turns": 12,
+            "keep_first_turns": 1,
+            "keep_last_turns": 4,
+            "use_token_counting": True,
+        }
+        for key, default in _COMPACTION_DEFAULTS.items():
+            val = getattr(compaction, key, default)
+            if val != default:
+                compaction_dict[key] = val
+        if compaction_dict:
+            existing_raw["compaction"] = compaction_dict
+        elif "compaction" in existing_raw:
+            # Keep existing compaction section if we have nothing to change
+            pass
+
+        config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(
-            yaml.dump(existing_raw, default_flow_style=False, allow_unicode=True, sort_keys=False),
+            yaml.dump(
+                existing_raw,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            ),
             encoding="utf-8",
         )
-        # Update cache
         _config_cache[str(config_path)] = config
         logger.info("Configuration saved to %s", config_path)
 

@@ -195,7 +195,7 @@ export const ApprovalModal: React.FC = () => {
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm"
+        className="fixed inset-0 bg-black/60"
         onClick={handleBackdropClick}
         aria-hidden="true"
       />
@@ -203,8 +203,8 @@ export const ApprovalModal: React.FC = () => {
       {/* Modal */}
       <div
         className={cn(
-          "relative z-50 w-full max-w-lg rounded-xl border border-border",
-          "bg-background shadow-2xl",
+          "relative z-50 w-full max-w-lg rounded-xl border border-[var(--line-strong)]",
+          "bg-[var(--panel)] shadow-2xl",
           "animate-in fade-in zoom-in-95 duration-200",
         )}
         role="alertdialog"

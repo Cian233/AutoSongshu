@@ -170,13 +170,13 @@ def sandbox_run_python(
     script_path: str = "",
     args_json: str = "[]",
     env_json: str = "{}",
-    timeout_sec: int = 0,  # 0 means use config default (120s, matches OpenCode)
+    timeout_sec: int = 0,
     max_output_chars: int = 20000,
 ) -> ToolResponse:
     """Run inline Python code or an existing sandbox script.
 
     OpenCode-aligned timeout strategy:
-    - Default timeout: 120s (2 min, matches opencode's DEFAULT_TIMEOUT)
+    - timeout_sec=0 uses config default timeout (120s by default)
     - Max timeout: 600s (10 min, enforced by sandbox)
     - Heartbeat detection: checks every 30s for long-running tasks
     - Output auto-truncated at 50KB / 2000 lines (opencode limits)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import difflib
+import inspect
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -22,7 +24,59 @@ from .prompts import (
 
 def _make_agentscope_output_safe(agent):
     agent._disable_console_output = True
+    _patch_interrupt_safe_acting(agent)
     return agent
+
+
+class _InterruptSafeAwaitable:
+    """Wrap coroutine objects so dropped, never-awaited calls are closed safely.
+
+    AgentScope's ReActAgent builds all ``_acting()`` coroutine objects up-front in
+    sequential mode. If an interrupt cancels the turn midway, the remaining
+    coroutine objects are never awaited and Python emits
+    ``RuntimeWarning: coroutine ... was never awaited``.
+
+    This wrapper ensures any coroutine that never starts awaiting is explicitly
+    closed when discarded.
+    """
+
+    __slots__ = ("_coro", "_await_started")
+
+    def __init__(self, coro: Any) -> None:
+        self._coro = coro
+        self._await_started = False
+
+    def __await__(self):
+        self._await_started = True
+        return self._coro.__await__()
+
+    def close(self) -> None:
+        coro = self._coro
+        self._coro = None
+        if coro is None or self._await_started:
+            return
+        with contextlib.suppress(Exception):
+            coro.close()
+
+    def __del__(self) -> None:
+        self.close()
+
+
+def _patch_interrupt_safe_acting(agent: Any) -> None:
+    if getattr(agent, "_autosongshu_interrupt_patch", False):
+        return
+
+    original_acting = getattr(agent, "_acting", None)
+    if original_acting is None or not callable(original_acting):
+        return
+    if not inspect.iscoroutinefunction(original_acting):
+        return
+
+    def _wrapped_acting(*args: Any, **kwargs: Any) -> _InterruptSafeAwaitable:
+        return _InterruptSafeAwaitable(original_acting(*args, **kwargs))
+
+    agent._acting = _wrapped_acting
+    agent._autosongshu_interrupt_patch = True
 
 
 def _parse_skill_command(user_message: str):

@@ -3,10 +3,12 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agentscope.tool import Toolkit
 
 from autosongshu_agent.skills import SkillRegistry, SkillRuntimeContext
+from autosongshu_agent.skills import registry as skill_registry_module
 
 
 def _write_skill(directory: Path, *, name: str, description: str, body: str) -> None:
@@ -48,7 +50,7 @@ class SkillRegistryTests(unittest.TestCase):
             self.assertIn("Recommended workflow", report.agent_prompt or "")
             self.assertEqual(report.loaded[0].name, "recon-web")
 
-    def test_register_skips_duplicate_skill_names_after_first_match(self) -> None:
+    def test_register_prefers_later_duplicate_skill_name_registration(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             first = root / "skills-a" / "recon-web"
@@ -58,9 +60,45 @@ class SkillRegistryTests(unittest.TestCase):
 
             report = SkillRegistry([str(first), str(second)]).register(Toolkit())
 
-            self.assertEqual(report.loaded_paths, [str(first.resolve())])
+            self.assertEqual(report.loaded_paths, [str(second.resolve())])
             self.assertEqual(len(report.skipped), 1)
-            self.assertIn("Duplicate skill name", report.skipped[0].reason or "")
+            self.assertIn("overridden by a later registration", (report.skipped[0].reason or "").lower())
+
+    def test_register_reuses_cached_skill_parse_until_skill_file_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            skill_dir = root / "cached-skill"
+            _write_skill(
+                skill_dir,
+                name="cached-skill",
+                description="Cache test skill.",
+                body="# Cache",
+            )
+
+            with patch.object(
+                skill_registry_module,
+                "_parse_skill_file",
+                wraps=skill_registry_module._parse_skill_file,
+            ) as parse_mock:
+                first = SkillRegistry([str(skill_dir)]).register(Toolkit())
+                second = SkillRegistry([str(skill_dir)]).register(Toolkit())
+
+                self.assertEqual(parse_mock.call_count, 1)
+                self.assertEqual(first.loaded[0].description, "Cache test skill.")
+                self.assertEqual(second.loaded[0].description, "Cache test skill.")
+
+                (skill_dir / "SKILL.md").write_text(
+                    "---\n"
+                    "name: cached-skill\n"
+                    "description: Cache invalidated.\n"
+                    "---\n\n"
+                    "# Cache Updated\n",
+                    encoding="utf-8",
+                )
+
+                third = SkillRegistry([str(skill_dir)]).register(Toolkit())
+                self.assertEqual(parse_mock.call_count, 2)
+                self.assertEqual(third.loaded[0].description, "Cache invalidated.")
 
     def test_register_keeps_manual_skills_available_for_explicit_activation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -150,6 +150,11 @@ class ChatSessionManager:
             raise FileNotFoundError(f"Config file not found: {path}")
         return str(path)
 
+    @staticmethod
+    def _config_path_key(path: str | Path) -> str:
+        resolved = str(Path(path).resolve())
+        return resolved.lower() if os.name == "nt" else resolved
+
     def _resolve_project_data_path(self, raw_path: str) -> Path:
         path = Path(str(raw_path or "").strip()).expanduser()
         if not path.is_absolute():
@@ -172,6 +177,65 @@ class ChatSessionManager:
                 path = (self.project_root / path).resolve()
             normalized.append(str(path))
         return normalized
+
+    @staticmethod
+    def _profile_name(profile: Any) -> str:
+        if isinstance(profile, dict):
+            name = str(profile.get("name", "") or "").strip()
+            if name:
+                return name
+            return str(profile.get("model_name", "") or "").strip()
+
+        name = str(getattr(profile, "name", "") or "").strip()
+        if name:
+            return name
+        return str(getattr(profile, "model_name", "") or "").strip()
+
+    @staticmethod
+    def _profile_compaction_overrides(profile: Any) -> dict[str, Any] | None:
+        if isinstance(profile, dict):
+            compaction = profile.get("compaction")
+            return compaction if isinstance(compaction, dict) else None
+
+        compaction = getattr(profile, "compaction", None)
+        if isinstance(compaction, dict):
+            return compaction
+
+        model_dump = getattr(compaction, "model_dump", None)
+        if callable(model_dump):
+            dumped = model_dump(exclude_none=True)
+            if isinstance(dumped, dict):
+                return dumped
+
+        legacy_dump = getattr(compaction, "dict", None)
+        if callable(legacy_dump):
+            dumped = legacy_dump(exclude_none=True)
+            if isinstance(dumped, dict):
+                return dumped
+
+        return None
+
+    def _apply_active_profile_compaction_overrides(self, config: Any) -> None:
+        model_config = getattr(config, "model", None)
+        compaction_config = getattr(config, "compaction", None)
+        if model_config is None or compaction_config is None:
+            return
+
+        active_name = str(getattr(model_config, "active", "") or "").strip()
+        if not active_name:
+            return
+
+        profiles = getattr(model_config, "profiles", None) or []
+        for profile in profiles:
+            if self._profile_name(profile) != active_name:
+                continue
+
+            profile_compaction = self._profile_compaction_overrides(profile)
+            if isinstance(profile_compaction, dict):
+                for key, value in profile_compaction.items():
+                    if hasattr(compaction_config, key):
+                        setattr(compaction_config, key, value)
+            return
 
     def _normalize_knowledge_base_ids(self, raw_ids: list[str]) -> list[str]:
         normalized: list[str] = []
@@ -238,7 +302,7 @@ class ChatSessionManager:
         stripped = " ".join(message.split())
         if len(stripped) <= length:
             return stripped or "New Chat"
-        return f"{stripped[: length - 1]}…"
+        return f"{stripped[: length - 3]}..."
 
     def _persist_session_state(self, session: ChatSessionState) -> None:
         self.session_store.upsert_session(session.persistence_dict())
@@ -303,7 +367,7 @@ class ChatSessionManager:
         collect_url(session.start_url)
 
         lines = [
-            "Pinned session context. Keep this context across turns unless the user explicitly changes scope or target.",
+            "Pinned session context. Use this as background continuity, but always prioritize the latest explicit user instruction in the current turn.",
         ]
         if initial_goal:
             lines.append(f"- Original user task: {truncate_text(initial_goal, 500)}")
@@ -339,7 +403,10 @@ class ChatSessionManager:
                 "- Prefer editing and reusing these existing scripts before creating a new sandbox file when continuing the same task."
             )
         lines.append(
-            "- When the current user turn is short or only provides a delta, continue using the original task and exact target URLs above."
+            "- If the latest user turn explicitly changes objective, scope, URLs, or constraints, treat that latest turn as the source of truth."
+        )
+        lines.append(
+            "- Only treat very short replies (for example: continue/ok) as continuation signals when no new target or requirement is introduced."
         )
         return "\n".join(lines)
 
@@ -717,7 +784,7 @@ class ChatSessionManager:
         wait for the compaction to finish.  Compaction runs on a dedicated
         thread and is purely deterministic (no LLM calls), so it completes
         quickly.  If it is still in progress we simply clear the stale
-        future and proceed — the next turn will trigger a fresh compaction
+        future and proceed -- the next turn will trigger a fresh compaction
         if the context is still over budget.
         """
         with self.lock:
@@ -731,7 +798,7 @@ class ChatSessionManager:
                 session.cleanup_future = None
                 session.is_compacting = False
             else:
-                # Compaction still running — cancel it and proceed.
+                # Compaction still running -- cancel it and proceed.
                 # It will be re-triggered after this turn if needed.
                 cleanup_future.cancel()
                 session.cleanup_future = None
@@ -750,18 +817,18 @@ class ChatSessionManager:
             recovered = True
             message.status = "failed"
             message.updated_at = now_iso()
-            message.error = "会话在服务重启前中断。"
+            message.error = "Session was interrupted before the service restart."
             if not message.text_content():
                 message.content = [
                     {
                         "type": "output_text",
-                        "text": "上一次执行在服务重启前中断，请重新发送消息继续。",
+                        "text": "The previous run was interrupted before the service restart. Please send the message again to continue.",
                     }
                 ]
 
         if recovered:
             session.status = "error"
-            session.error = "上一次执行在服务重启前中断，请重新发送消息继续。"
+            session.error = "The previous run was interrupted before the service restart. Please send the message again to continue."
             session.updated_at = now_iso()
         return recovered
 
@@ -842,20 +909,9 @@ class ChatSessionManager:
             config.skills.directories.extend(session.skill_dirs)
         config.agent.mode = session.mode
 
-        # Apply per-profile compaction overrides: if the active model
-        # profile defines a ``compaction`` dict, merge it into the
-        # global compaction config so that each model can have its own
-        # context budget.
-        active_name = getattr(config.model, "active", None)
-        if active_name and config.model.profiles:
-            for profile in config.model.profiles:
-                if isinstance(profile, dict) and profile.get("name") == active_name:
-                    profile_compaction = profile.get("compaction")
-                    if isinstance(profile_compaction, dict):
-                        for key, value in profile_compaction.items():
-                            if hasattr(config.compaction, key):
-                                setattr(config.compaction, key, value)
-                    break
+        # Apply active-profile compaction overrides so each model can
+        # own its context budget (supports both dict and Pydantic profiles).
+        self._apply_active_profile_compaction_overrides(config)
 
         permission_interceptor = None
         if self._permission_interceptor_factory is not None:
@@ -1006,44 +1062,123 @@ class ChatSessionManager:
                 raise KeyError(session_id)
             return session.detail_dict()
 
-    def get_model_profiles(self) -> list[dict[str, Any]]:
-        """Return all configured model profiles via the ModelRouter."""
-        # Access the router from any active session's builder mixin
+    def get_model_profiles(
+        self,
+        config_path: str | Path | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return configured model profiles for a specific config path when provided."""
+        target_key = (
+            self._config_path_key(config_path) if config_path is not None else None
+        )
+
+        # Prefer routers on active conversations so runtime overrides are reflected.
         with self.lock:
-            for session in self.chat_sessions.values():
-                if hasattr(session, "model_router") and session.model_router:
-                    return session.model_router.list_profiles()
-        # No active session — build a temporary router from default config
+            sessions = list(self.chat_sessions.values())
+
+        for session in sessions:
+            if target_key is not None:
+                if self._config_path_key(session.config_path) != target_key:
+                    continue
+            conversation = session.conversation
+            if conversation is None:
+                continue
+            router = getattr(conversation, "model_router", None)
+            if router is not None:
+                return router.list_profiles()
+
+        # No matching active session: build a temporary router from config file.
+        target_path = str(config_path or self.default_config_path)
         try:
             from ..model_router import parse_profiles_from_config, ModelRouter
-            config = load_config(str(self.default_config_path))
+
+            config = load_config(target_path)
             profiles = parse_profiles_from_config(config.model)
-            router = ModelRouter(profiles=profiles)
+            router = ModelRouter(
+                profiles=profiles,
+                default_profile_name=getattr(config.model, "active", None),
+            )
             return router.list_profiles()
         except Exception:
             return []
 
-    def set_active_model(self, profile_name: str) -> bool:
-        """Switch the active model profile across all sessions."""
+    def set_active_model(
+        self,
+        profile_name: str,
+        *,
+        config_path: str | Path | None = None,
+    ) -> bool:
+        """Switch the active model profile across matching active sessions."""
         switched = False
+        target_key = (
+            self._config_path_key(config_path) if config_path is not None else None
+        )
+
         with self.lock:
-            for session in self.chat_sessions.values():
-                if hasattr(session, "model_router") and session.model_router:
-                    if session.model_router.set_active(profile_name):
-                        switched = True
+            sessions = list(self.chat_sessions.values())
+
+        for session in sessions:
+            if target_key is not None:
+                if self._config_path_key(session.config_path) != target_key:
+                    continue
+            conversation = session.conversation
+            if conversation is None:
+                continue
+            router = getattr(conversation, "model_router", None)
+            if router is None:
+                continue
+            if not router.set_active(profile_name):
+                continue
+            switched = True
+            with contextlib.suppress(Exception):
+                conversation.config.model.active = profile_name
+            with contextlib.suppress(Exception):
+                self._apply_active_profile_compaction_overrides(conversation.config)
+            with contextlib.suppress(Exception):
+                conversation.agent.model = conversation._build_model()
+            with contextlib.suppress(Exception):
+                conversation.memory_model = conversation._build_memory_model()
         return switched
 
-    def _refresh_model_routers(self, config) -> None:
-        """Rebuild ModelRouter instances in all active sessions after config change."""
+    def _refresh_model_routers(
+        self,
+        config: Any,
+        *,
+        config_path: str | Path | None = None,
+    ) -> None:
+        """Rebuild ModelRouter instances in matching active sessions after config change."""
         from ..model_router import parse_profiles_from_config, ModelRouter
+
+        target_key = (
+            self._config_path_key(config_path) if config_path is not None else None
+        )
         profiles = parse_profiles_from_config(config.model)
+
         with self.lock:
-            for session in self.chat_sessions.values():
-                if hasattr(session, "_model_router"):
-                    session._model_router = ModelRouter(
-                        profiles=profiles,
-                        default_profile_name=getattr(config.model, "active", None),
-                    )
+            sessions = list(self.chat_sessions.values())
+
+        for session in sessions:
+            if target_key is not None:
+                if self._config_path_key(session.config_path) != target_key:
+                    continue
+            conversation = session.conversation
+            if conversation is None:
+                continue
+            conversation._model_router = ModelRouter(
+                profiles=list(profiles),
+                default_profile_name=getattr(config.model, "active", None),
+            )
+            with contextlib.suppress(Exception):
+                conversation.config.model.profiles = list(
+                    getattr(config.model, "profiles", []) or []
+                )
+            with contextlib.suppress(Exception):
+                conversation.config.model.active = getattr(config.model, "active", None)
+            with contextlib.suppress(Exception):
+                self._apply_active_profile_compaction_overrides(conversation.config)
+            with contextlib.suppress(Exception):
+                conversation.agent.model = conversation._build_model()
+            with contextlib.suppress(Exception):
+                conversation.memory_model = conversation._build_memory_model()
 
     def interrupt_session(
         self,
@@ -1337,11 +1472,11 @@ class ChatSessionManager:
 
         system_prompt = "\n".join(
             [
-                "你是资深漏洞复盘与知识沉淀助手。",
-                "任务是把会话中的有效漏洞经验沉淀为可复用文档，重点回答：漏洞如何被引起、漏洞点在哪里。",
-                '禁止臆造；对不确定信息必须标记为"待验证"。',
-                "优先抽取：触发条件、脆弱点位置、证据特征、可复用检测方法与修复建议。",
-                "输出要求精炼、可执行、可复用。",
+                "You are an experienced security postmortem and knowledge assistant.",
+                "Summarize reusable vulnerability knowledge from this session.",
+                "Do not fabricate; mark uncertain items as pending verification.",
+                "Prioritize trigger conditions, vulnerable locations, evidence, reusable checks, and remediation suggestions.",
+                "Output should be concise, actionable, and reusable.",
             ],
         )
         user_prompt = "\n".join(
@@ -1349,36 +1484,36 @@ class ChatSessionManager:
                 f"会话ID：{session_id}",
                 f"会话标题：{session_title}",
                 "",
-                "请输出严格 JSON（不要代码块、不要额外解释），格式如下：",
+                "Return strict JSON only (no code fences, no extra explanation) using this schema:",
                 '{"title":"文档标题","content":"Markdown 正文"}',
                 "",
-                "title 规则：",
-                "- 明确漏洞类型与核心场景，15-28字优先。",
-                '- 避免空泛词（如"经验总结"），应可直接作为知识库索引标题。',
+                "Title rules:",
+                "- Clearly state vulnerability type and scenario; prefer 15-28 characters in Chinese or concise English.",
+                "- Avoid vague terms like summary; make it suitable as a knowledge-base index title.",
                 "",
-                "content 必须使用以下结构（保留标题层级）：",
+                "Content must follow this exact structure (keep heading levels):",
                 "## 漏洞结论",
-                "- 每条包含：漏洞类型、风险等级、影响面。",
+                "- Each item includes vulnerability type, risk level, and impact scope.",
                 "",
                 "## 漏洞成因链路",
-                '- 用"触发条件 -> 脆弱点 -> 漏洞形成 -> 影响"描述。',
-                "- 若有多条链路，按可利用性从高到低排序。",
+                "- Use chain: trigger -> weak point -> vulnerability formation -> impact.",
+                "- If multiple chains exist, order by exploitability from high to low.",
                 "",
-                "## 漏洞点定位",
-                "- 明确定位到：页面/接口/参数/请求方法/关键配置/代码位置（若会话中有）。",
-                '- 若定位信息不足，列出"待验证定位点"。',
+                "## Vulnerable Location",
+                "- Specify page/API/parameter/method/config/code location when available.",
+                "- If location is uncertain, list pending verification points.",
                 "",
-                "## 复现与证据",
-                "- 给出最小复现步骤。",
-                "- 提炼关键证据：请求特征、响应特征、报错/日志线索、边界条件。",
+                "## Reproduction and Evidence",
+                "- Provide minimal reproduction steps.",
+                "- Extract key evidence: request traits, response traits, logs/errors, boundary conditions.",
                 "",
-                "## 修复与加固",
-                '- 区分"立即修复"与"长期治理"。',
-                "- 每项修复建议应对应一条成因或漏洞点。",
+                "## Remediation and Hardening",
+                "- Separate immediate fixes from long-term governance.",
+                "- Each remediation item should map to a cause or vulnerable point.",
                 "",
-                "## 可复用检测剧本",
-                "- 给出后续复测与批量排查的清单化步骤。",
-                "- 明确误报排除条件与失败判据。",
+                "## Reusable Detection Playbook",
+                "- Provide checklist-style steps for retest and batch checks.",
+                "- Define false-positive exclusions and failure criteria.",
                 "",
                 "以下是需要总结的会话记录：",
                 transcript,
@@ -1587,9 +1722,9 @@ class ChatSessionManager:
             if session is None:
                 raise KeyError(session_id)
             if session.is_compacting:
-                raise RuntimeError("当前会话正在压缩记忆，请稍后再试。")
+                raise RuntimeError("Session is compacting memory. Please try again shortly.")
             if session.future is not None and not session.future.done():
-                raise RuntimeError("当前会话仍在处理中，请等待上一条消息完成。")
+                raise RuntimeError("Session is still processing. Please wait for the previous message to finish.")
 
             next_order = len(session.messages) + 1
             timestamp = now_iso()
@@ -1622,12 +1757,12 @@ class ChatSessionManager:
                         pass
                     session.conversation = None
                 assistant_message.content = [
-                    {"type": "output_text", "text": "会话历史已清空。"}
+                    {"type": "output_text", "text": "Conversation history has been cleared."}
                 ]
                 session.messages.extend([user_message, assistant_message])
 
             elif command == "/stats":
-                usage_text = "未找到 Token 消耗统计。"
+                usage_text = "Token usage stats are unavailable."
                 if session.conversation is not None and hasattr(
                     session.conversation, "cost_tracker"
                 ):
@@ -1635,7 +1770,7 @@ class ChatSessionManager:
                     model_name = session._get_model_name()
                     summary = tracker.summary_dict(model_name=model_name)
                     lines = [
-                        "**Token 消耗统计**",
+                        "**Token Usage Stats**",
                         f"- Input Tokens: {summary['input_tokens']}",
                         f"- Output Tokens: {summary['output_tokens']}",
                         f"- Total Tokens: {summary['total_tokens']}",
@@ -1699,7 +1834,7 @@ class ChatSessionManager:
                 with self.lock:
                     pending_messages = self._context_history_messages(session)
                     if not pending_messages:
-                        raise RuntimeError("没有可供压缩的会话历史。")
+                        raise RuntimeError("No conversation history available for compaction.")
                     compactable_messages, _ = self._split_compaction_messages(
                         session, pending_messages
                     )
@@ -1740,7 +1875,7 @@ class ChatSessionManager:
 
                 assistant_message = self._find_message(session, assistant_message_id)
                 assistant_message.content = [
-                    {"type": "output_text", "text": "会话记忆已手动压缩完成。"}
+                    {"type": "output_text", "text": "Manual memory compaction completed."}
                 ]
                 assistant_message.status = "completed"
                 assistant_message.updated_at = now_iso()
@@ -1798,7 +1933,7 @@ class ChatSessionManager:
             if session is None:
                 raise KeyError(session_id)
             if session.future is not None and not session.future.done():
-                raise RuntimeError("当前会话仍在处理中，请等待上一条消息完成。")
+                raise RuntimeError("Session is still processing. Please wait for the previous message to finish.")
 
             next_order = len(session.messages) + 1
             timestamp = now_iso()
@@ -2100,3 +2235,4 @@ class ChatSessionManager:
         self.session_store.close()
         self.executor.shutdown(wait=False, cancel_futures=True)
         self._compaction_executor.shutdown(wait=False, cancel_futures=True)
+

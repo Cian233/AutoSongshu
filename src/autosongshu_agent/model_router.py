@@ -589,12 +589,47 @@ def _parse_single_profile(raw: dict[str, Any]) -> ModelProfile:
 
 
 def _pydantic_to_profile(model_config: Any, default_name: str = "default") -> ModelProfile:
-    """Convert a legacy ModelConfig (Pydantic) to a ModelProfile."""
-    name = getattr(model_config, "model_name", "default")
+    """Convert a Pydantic model config/profile object to ``ModelProfile``."""
+    raw_name = str(getattr(model_config, "name", "") or "").strip()
+    model_name = str(
+        getattr(model_config, "model_name", "") or raw_name or default_name
+    ).strip()
+    name = raw_name or default_name
+
+    provider_str = str(getattr(model_config, "provider", "custom") or "custom")
+    try:
+        provider = ModelProvider(provider_str)
+    except ValueError:
+        provider = ModelProvider.CUSTOM
+
+    raw_tasks = getattr(model_config, "tasks", ["general"]) or ["general"]
+    tasks: list[TaskType] = []
+    for task in raw_tasks:
+        raw_task = getattr(task, "value", task)
+        try:
+            tasks.append(TaskType(str(raw_task)))
+        except ValueError:
+            logger.warning(
+                "Unknown task type '%s' in profile '%s'",
+                raw_task,
+                name,
+            )
+    if not tasks:
+        tasks = [TaskType.GENERAL]
+
+    display_name = str(
+        getattr(model_config, "display_name", "") or model_name or name
+    ).strip()
+
+    compaction = getattr(model_config, "compaction", None)
+    if not isinstance(compaction, dict):
+        compaction = None
+
     return ModelProfile(
-        name=default_name,
-        display_name=name,
-        model_name=name,
+        name=name,
+        display_name=display_name,
+        provider=provider,
+        model_name=model_name,
         api_key=getattr(model_config, "api_key", None),
         base_url=getattr(model_config, "base_url", None),
         temperature=float(getattr(model_config, "temperature", 1.0)),
@@ -602,6 +637,11 @@ def _pydantic_to_profile(model_config: Any, default_name: str = "default") -> Mo
         max_tokens=getattr(model_config, "max_tokens", None),
         timeout=float(getattr(model_config, "timeout", 120.0)),
         stream=bool(getattr(model_config, "stream", True)),
+        cost_per_1m_input=float(getattr(model_config, "cost_per_1m_input", 0) or 0),
+        cost_per_1m_output=float(getattr(model_config, "cost_per_1m_output", 0) or 0),
+        tasks=tasks,
+        enabled=bool(getattr(model_config, "enabled", True)),
+        compaction=compaction,
     )
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gc
+import warnings
 import unittest
 
 from autosongshu_agent.agent.utils import (
@@ -23,6 +25,14 @@ class _DummyAgent:
         self._disable_console_output = False
 
 
+class _DummyInterruptibleAgent:
+    def __init__(self) -> None:
+        self._disable_console_output = False
+
+    async def _acting(self, tool_call: str) -> str:
+        return tool_call
+
+
 def _event(*blocks: dict[str, object]) -> dict[str, object]:
     return {"blocks": list(blocks)}
 
@@ -35,6 +45,34 @@ class AgentOutputSafetyTests(unittest.TestCase):
 
         self.assertIs(returned, agent)
         self.assertTrue(agent._disable_console_output)
+
+
+class AgentInterruptCoroutineSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wrapped_acting_remains_awaitable(self) -> None:
+        agent = _make_agentscope_output_safe(_DummyInterruptibleAgent())
+        result = await agent._acting("tool:ok")
+        self.assertEqual(result, "tool:ok")
+
+    async def test_dropped_unawaited_acting_coroutines_are_closed(self) -> None:
+        agent = _make_agentscope_output_safe(_DummyInterruptibleAgent())
+
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always", RuntimeWarning)
+            pending = [agent._acting("tool:1"), agent._acting("tool:2")]
+            first = pending.pop(0)
+            second = pending.pop(0)
+
+            self.assertEqual(await first, "tool:1")
+            del second
+            del pending
+            gc.collect()
+
+        unawaited_warnings = [
+            warning
+            for warning in captured
+            if "was never awaited" in str(warning.message)
+        ]
+        self.assertFalse(unawaited_warnings)
 
     def test_force_tool_continuation_for_tool_only_blocks_without_summary(self) -> None:
         self.assertTrue(

@@ -209,6 +209,133 @@ def _config_to_safe_dict(config: Any) -> dict[str, Any]:
     return _mask_sensitive(raw)
 
 
+_MODEL_PROFILE_FIELDS = (
+    "name",
+    "display_name",
+    "provider",
+    "model_name",
+    "api_key",
+    "base_url",
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "timeout",
+    "stream",
+    "tasks",
+    "enabled",
+    "cost_per_1m_input",
+    "cost_per_1m_output",
+    "compaction",
+)
+
+
+def _profile_to_dict(raw_profile: Any) -> dict[str, Any]:
+    """Normalize a profile object (dict / pydantic model) into a plain dict."""
+    if isinstance(raw_profile, dict):
+        return dict(raw_profile)
+
+    model_dump = getattr(raw_profile, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump(exclude_none=True)
+        if isinstance(dumped, dict):
+            return dumped
+
+    legacy_dump = getattr(raw_profile, "dict", None)
+    if callable(legacy_dump):
+        dumped = legacy_dump(exclude_none=True)
+        if isinstance(dumped, dict):
+            return dumped
+
+    profile: dict[str, Any] = {}
+    for key in _MODEL_PROFILE_FIELDS:
+        value = getattr(raw_profile, key, None)
+        if value is not None:
+            profile[key] = value
+    return profile
+
+
+def _normalize_profiles(raw_profiles: Any) -> list[dict[str, Any]]:
+    """Return a clean list of profile dicts with guaranteed non-empty names."""
+    if not isinstance(raw_profiles, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for raw in raw_profiles:
+        profile = _profile_to_dict(raw)
+        if not isinstance(profile, dict):
+            continue
+        name = str(profile.get("name", "") or "").strip()
+        if not name:
+            fallback_name = str(profile.get("model_name", "") or "").strip()
+            if not fallback_name:
+                continue
+            name = fallback_name
+        profile["name"] = name
+        normalized.append(profile)
+    return normalized
+
+
+def _legacy_single_model_profile(model_cfg: Any, *, existing_names: set[str]) -> dict[str, Any] | None:
+    """Create a profile from legacy single-model fields when migrating to multi-profile."""
+    model_name = str(getattr(model_cfg, "model_name", "") or "").strip()
+    if not model_name:
+        return None
+
+    profile_name = model_name
+    if profile_name in existing_names:
+        base = "legacy-default"
+        profile_name = base
+        index = 1
+        while profile_name in existing_names:
+            index += 1
+            profile_name = f"{base}-{index}"
+
+    profile: dict[str, Any] = {
+        "name": profile_name,
+        "display_name": model_name,
+        "provider": "custom",
+        "model_name": model_name,
+        "temperature": float(getattr(model_cfg, "temperature", 1.0)),
+        "top_p": float(getattr(model_cfg, "top_p", 0.95)),
+        "timeout": float(getattr(model_cfg, "timeout", 120.0)),
+        "stream": bool(getattr(model_cfg, "stream", True)),
+        "tasks": ["general"],
+        "enabled": True,
+    }
+    for key in ("api_key", "base_url", "max_tokens"):
+        value = getattr(model_cfg, key, None)
+        if value not in (None, ""):
+            profile[key] = value
+    return profile
+
+
+def _resolve_model_config_path(
+    manager: ChatSessionManager,
+    *,
+    request: Request,
+    body: dict[str, Any] | None = None,
+) -> str:
+    payload = body or {}
+
+    session_id = str(payload.get("session_id") or "").strip()
+    if session_id:
+        with manager.lock:
+            session = manager.chat_sessions.get(session_id)
+        if session is None:
+            raise HTTPException(
+                status_code=404, detail=f"Chat session '{session_id}' not found"
+            )
+        return session.config_path
+
+    query_path = str(request.query_params.get("config_path") or "").strip()
+    body_path = str(payload.get("config_path") or "").strip()
+    raw_path = body_path or query_path or str(manager.default_config_path)
+    try:
+        return manager._resolve_config_path(raw_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 class SSEHub:
     def __init__(self) -> None:
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -500,11 +627,18 @@ def create_app() -> FastAPI:
     # ── Model routing API ──────────────────────────────────────────
 
     @app.get("/api/models")
-    async def list_models() -> dict[str, Any]:
-        """List all configured model profiles."""
+    async def list_models(request: Request) -> dict[str, Any]:
+        """List model profiles for the selected config path."""
         try:
-            profiles = manager.get_model_profiles()
-            return {"profiles": profiles, "timestamp": now_iso()}
+            config_path = _resolve_model_config_path(manager, request=request)
+            profiles = manager.get_model_profiles(config_path=config_path)
+            return {
+                "profiles": profiles,
+                "config_path": str(config_path),
+                "timestamp": now_iso(),
+            }
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to list models: {exc}"
@@ -512,24 +646,54 @@ def create_app() -> FastAPI:
 
     @app.put("/api/models/active")
     async def set_active_model(request: Request) -> dict[str, Any]:
-        """Switch the active model profile at runtime."""
+        """Switch the active model profile and persist it to config."""
         body = await request.json()
         profile_name = body.get("profile_name", "").strip()
         if not profile_name:
             raise HTTPException(status_code=400, detail="Missing 'profile_name'")
 
         try:
-            ok = manager.set_active_model(profile_name)
-            if not ok:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Unknown profile '{profile_name}'",
-                )
+            config_path = _resolve_model_config_path(
+                manager, request=request, body=body
+            )
+            config = _reload_config(str(config_path))
+
+            profiles = _normalize_profiles(getattr(config.model, "profiles", []))
+            if profiles:
+                profile_names = {
+                    str(p.get("name", "") or "").strip()
+                    for p in profiles
+                    if isinstance(p, dict)
+                }
+                if profile_name not in profile_names:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Unknown profile '{profile_name}'",
+                    )
+                config.model.profiles = profiles
+            else:
+                # Legacy single-model config has no explicit profiles; keep backward
+                # compatibility with the synthetic "default" profile name.
+                if profile_name != "default":
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Unknown profile '{profile_name}'",
+                    )
+
+            config.model.active = profile_name
+            _save_config(str(config_path), config)
+
+            # Refresh active sessions sharing the same config so switch applies immediately.
+            manager._refresh_model_routers(config, config_path=config_path)
+
             return {
                 "ok": True,
                 "active_profile": profile_name,
+                "config_path": str(config_path),
                 "timestamp": now_iso(),
             }
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to switch model: {exc}"
@@ -550,15 +714,34 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Profile 'model_name' is required")
 
         try:
-            config_path = manager.default_config_path
+            config_path = _resolve_model_config_path(
+                manager, request=request, body=body
+            )
             config = _reload_config(str(config_path))
 
-            # Ensure profiles list exists
-            if not config.model.profiles:
-                config.model.profiles = []
+            # Normalize profile entries (support both dict and Pydantic profile objects).
+            profiles = _normalize_profiles(getattr(config.model, "profiles", []))
+
+            # First-time migration: preserve legacy single-model settings as a profile
+            # so adding a new channel does not make the old model disappear.
+            if not profiles:
+                legacy_profile = _legacy_single_model_profile(
+                    config.model,
+                    existing_names=set(),
+                )
+                if legacy_profile is not None:
+                    profiles.append(legacy_profile)
+                    if not getattr(config.model, "active", None):
+                        config.model.active = legacy_profile["name"]
+
+            config.model.profiles = profiles
 
             # Check for duplicate name
-            existing_names = [p.get("name", "") for p in config.model.profiles]
+            existing_names = {
+                str(p.get("name", "") or "").strip()
+                for p in config.model.profiles
+                if isinstance(p, dict)
+            }
             if name in existing_names:
                 raise HTTPException(
                     status_code=409,
@@ -583,18 +766,19 @@ def create_app() -> FastAPI:
 
             config.model.profiles.append(new_profile)
 
-            # Set as active if this is the first profile
-            if len(config.model.profiles) == 1:
+            # Set as active only when there is no active profile yet.
+            if not getattr(config.model, "active", None):
                 config.model.active = name
 
             _save_config(str(config_path), config)
 
-            # Refresh router in all sessions
-            manager._refresh_model_routers(config)
+            # Refresh router for sessions that use this config.
+            manager._refresh_model_routers(config, config_path=config_path)
 
             return {
                 "ok": True,
                 "profile": new_profile,
+                "config_path": str(config_path),
                 "timestamp": now_iso(),
             }
         except HTTPException:
@@ -605,18 +789,19 @@ def create_app() -> FastAPI:
             ) from exc
 
     @app.delete("/api/models/{profile_name}")
-    async def delete_model_profile(profile_name: str) -> dict[str, Any]:
+    async def delete_model_profile(profile_name: str, request: Request) -> dict[str, Any]:
         """Remove a model profile from the config file."""
         try:
-            config_path = manager.default_config_path
+            config_path = _resolve_model_config_path(manager, request=request)
             config = _reload_config(str(config_path))
 
-            if not config.model.profiles:
+            profiles = _normalize_profiles(getattr(config.model, "profiles", []))
+            if not profiles:
                 raise HTTPException(status_code=404, detail="No profiles configured")
 
-            original_len = len(config.model.profiles)
+            original_len = len(profiles)
             config.model.profiles = [
-                p for p in config.model.profiles
+                p for p in profiles
                 if p.get("name") != profile_name
             ]
 
@@ -635,11 +820,12 @@ def create_app() -> FastAPI:
                 )
 
             _save_config(str(config_path), config)
-            manager._refresh_model_routers(config)
+            manager._refresh_model_routers(config, config_path=config_path)
 
             return {
                 "ok": True,
                 "deleted": profile_name,
+                "config_path": str(config_path),
                 "timestamp": now_iso(),
             }
         except HTTPException:
@@ -657,15 +843,18 @@ def create_app() -> FastAPI:
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-        config_path = manager.default_config_path
+        config_path = _resolve_model_config_path(
+            manager, request=request, body=body
+        )
         config = _reload_config(str(config_path))
 
-        if not config.model.profiles:
+        profiles = _normalize_profiles(getattr(config.model, "profiles", []))
+        if not profiles:
             raise HTTPException(status_code=404, detail="No profiles configured")
 
         target = None
-        for p in config.model.profiles:
-            if isinstance(p, dict) and p.get("name") == profile_name:
+        for p in profiles:
+            if p.get("name") == profile_name:
                 target = p
                 break
         if target is None:
@@ -692,12 +881,15 @@ def create_app() -> FastAPI:
             elif compaction_patch is None:
                 target.pop("compaction", None)
 
+        config.model.profiles = profiles
+
         _save_config(str(config_path), config)
-        manager._refresh_model_routers(config)
+        manager._refresh_model_routers(config, config_path=config_path)
 
         return {
             "ok": True,
             "profile": target,
+            "config_path": str(config_path),
             "timestamp": now_iso(),
         }
 

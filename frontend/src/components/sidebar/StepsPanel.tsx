@@ -427,9 +427,9 @@ function TaskListModal({ open, tasks, onClose }: TaskListModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
+      <div className="absolute inset-0 bg-black/60" aria-hidden="true" />
       <div
-        className="relative z-10 w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg-elev)] shadow-2xl"
+        className="relative z-10 w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-xl border border-[var(--line-strong)] bg-[var(--panel)] shadow-2xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby="tasks-modal-title"
